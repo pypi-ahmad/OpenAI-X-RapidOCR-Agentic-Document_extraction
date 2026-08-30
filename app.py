@@ -8,6 +8,11 @@ st.set_page_config(
     layout="wide",
 )
 
+st.session_state.setdefault("processed_documents", {})
+st.session_state.setdefault("current_processed_document_id", None)
+st.session_state.setdefault("chat_messages", [])
+st.session_state.setdefault("chat_scope", ())
+
 page = st.navigation(
     [
         st.Page(
@@ -20,6 +25,7 @@ page = st.navigation(
         st.Page("app_pages/section.py", title="Section", icon=":material/account_tree:"),
         st.Page("app_pages/split.py", title="Split", icon=":material/call_split:"),
         st.Page("app_pages/extract.py", title="Extract", icon=":material/data_object:"),
+        st.Page("app_pages/chat.py", title="Chat", icon=":material/chat:"),
     ],
     position="top",
 )

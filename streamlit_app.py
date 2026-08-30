@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import uuid
 from typing import Literal
 
 import streamlit as st
@@ -15,6 +16,7 @@ from agentic_extractor.artifacts import (
 )
 from agentic_extractor.config import SETTINGS
 from agentic_extractor.costs import aggregate_usage
+from agentic_extractor.document_chat import ProcessedMarkdownDocument
 from agentic_extractor.ingest import (
     IngestedDocument,
     IngestError,
@@ -69,6 +71,24 @@ def set_state(state: AppState) -> None:
 
 def reset() -> None:
     st.session_state.clear()
+
+
+def remember_processed_markdown(result, status: str) -> None:
+    """Upsert the current result as a Markdown-only session chat source."""
+    document_id = st.session_state.get("current_processed_document_id")
+    if not document_id:
+        document_id = uuid.uuid4().hex
+        st.session_state.current_processed_document_id = document_id
+    documents = dict(st.session_state.get("processed_documents", {}))
+    documents[document_id] = ProcessedMarkdownDocument(
+        document_id=document_id,
+        display_name=str(result.document_metadata.get("file_name") or "Processed document"),
+        markdown=result.markdown,
+        selected_pages=result.selected_pages,
+        processing_status=status,
+        failed_pages=result.failed_pages,
+    )
+    st.session_state.processed_documents = documents
 
 
 def _money(value: float | None, status: str) -> str:
@@ -140,6 +160,8 @@ st.session_state.setdefault("original", None)
 st.session_state.setdefault("usage_history", [])
 st.session_state.setdefault("workflow", None)
 st.session_state.setdefault("upload_identity", None)
+st.session_state.setdefault("processed_documents", {})
+st.session_state.setdefault("current_processed_document_id", None)
 
 st.title("Agentic document extraction")
 st.caption("Local RapidOCR followed by required GPT-5.6-luna visual and semantic refinement")
@@ -168,6 +190,7 @@ with st.sidebar:
             st.session_state["workflow"] = None
             st.session_state["original"] = None
             st.session_state.pop("artifacts", None)
+            st.session_state.current_processed_document_id = None
             set_state(AppState.VALIDATING)
         try:
             document = inspect_upload(uploaded.name, upload_data)
@@ -182,6 +205,7 @@ with st.sidebar:
         st.session_state["workflow"] = None
         st.session_state["original"] = None
         st.session_state.pop("artifacts", None)
+        st.session_state.current_processed_document_id = None
         set_state(AppState.IDLE)
 
     mode_value = st.segmented_control(
@@ -483,6 +507,7 @@ if process_clicked and document:
         st.session_state.result = result
         st.session_state.workflow = workflow
         st.session_state.artifacts = artifacts
+        remember_processed_markdown(result, final_state.value)
         st.session_state.usage_history.append(
             {
                 "mode": result.effective_mode.value,
@@ -651,6 +676,7 @@ if workflow := st.session_state.workflow:
                     result.workflow_manifest = st.session_state.workflow.manifest()
                     result.markdown = render_result_markdown(result)
                     st.session_state.artifacts = build_local_artifacts(result)
+                    remember_processed_markdown(result, st.session_state.app_state.value)
                     st.rerun()
     downloads.download_button("HTML", st.session_state.artifacts.html, "document.html")
     downloads.download_button(
