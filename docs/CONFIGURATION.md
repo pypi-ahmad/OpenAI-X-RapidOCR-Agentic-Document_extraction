@@ -87,7 +87,7 @@ environment-variable settings. Most are defined by `Settings` in
 | `job_ttl_seconds` | `3600` | Lifetime of an in-memory API job. Expired jobs are removed during job lookup and return `job_not_found`. |
 | `model` | `gpt-5.6-luna` | Declared model policy value. The request boundary also uses `gpt-5.6-luna`. |
 | `reasoning_effort` | `medium` | Declared reasoning policy value. The request boundary also uses `medium`. |
-| `cloud_batch_characters` | `80,000` | Character budget for each cloud-refinement batch. |
+| `cloud_batch_characters` | `80,000` | Rendered evidence-character budget for each cloud-refinement batch. Oversized single pages are isolated, not truncated. |
 | High Accuracy block review threshold | `0.85` | Fixed code policy: OCR blocks with a score strictly below `0.85` require a grounded refinement outcome in High Accuracy mode. A score equal to `0.85` is not below the threshold. This is not user-configurable. |
 
 ## Per-environment overrides

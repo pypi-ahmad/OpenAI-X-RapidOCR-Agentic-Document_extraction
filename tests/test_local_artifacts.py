@@ -114,15 +114,27 @@ def test_markdown_display_normalizes_html_tables_and_page_markers() -> None:
     assert r"| Name: A \| B | Plan: H&W |" in displayed
     assert "<table" not in displayed
     assert (
-        displayed.index("Before")
-        < displayed.index("Member information")
-        < displayed.index("After")
+        displayed.index("Before") < displayed.index("Member information") < displayed.index("After")
     )
 
 
 def test_manifest_reports_gpt_only_after_a_real_cloud_call() -> None:
     result = parse_result()
     result.usage.call_count = 1
+    result.usage.calls = [
+        {
+            "purpose": "refinement",
+            "context": {
+                "kind": "parse",
+                "prompt_characters": 100,
+                "evidence_characters": 40,
+                "source_text_characters": 9,
+                "block_count": 1,
+                "compact_pages": [2],
+                "full_context_pages": [],
+            },
+        }
+    ]
     result.cloud_output = {"markdown": "refined"}
     result.refinements = [
         RefinementRecord(
@@ -137,6 +149,10 @@ def test_manifest_reports_gpt_only_after_a_real_cloud_call() -> None:
     assert artifacts.manifest["processing"]["gpt_model"] == "gpt-5.6-luna"
     assert artifacts.manifest["processing"]["reasoning_effort"] == "medium"
     assert artifacts.manifest["usage_and_cost"]["gpt"]["call_count"] == 1
+    assert (
+        artifacts.manifest["usage_and_cost"]["gpt"]["calls"][0]["context"]["evidence_characters"]
+        == 40
+    )
     assert artifacts.manifest["refinement_layer"][0]["block_id"] == "p2-b1"
     parsed = json.loads(artifacts.parse_result)
     assert parsed["refinement_layer"][0]["proposed_text"] == "Total: 42.00"

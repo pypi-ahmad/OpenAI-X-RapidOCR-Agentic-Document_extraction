@@ -1,3 +1,4 @@
+import json
 import re
 from types import SimpleNamespace
 
@@ -81,10 +82,19 @@ def test_markdown_workflow_uses_text_grounding_without_page_images() -> None:
     content = responses.kwargs["input"][0]["content"]
     assert [item["type"] for item in content] == ["input_text"]
     assert "# Invoice" in content[0]["text"]
-    assert '"id":"p1-b1"' in content[0]["text"]
+    assert '"block_id"' in content[0]["text"]
+    assert '"p1-b1"' in content[0]["text"]
     assert result.classifications[0].label == "invoice"
     assert usage.calls[0]["image_pages"] == []
     assert usage.calls[0]["purpose"] == "markdown_workflow"
+    context = usage.calls[0]["context"]
+    assert context["kind"] == "grounded_markdown"
+    assert context["prompt_characters"] == len(content[0]["text"])
+    assert context["evidence_characters"] > len("<!-- page: 1 -->\n\n# Invoice")
+    assert context["source_text_characters"] == 7
+    assert context["block_count"] == 1
+    assert context["compact_pages"] == []
+    assert context["full_context_pages"] == []
     assert responses.kwargs["model"] == "gpt-5.6-luna"
     assert responses.kwargs["reasoning"] == {"effort": "medium"}
     assert {item["name"] for item in usage.calls[0]["prompts"]} == {
@@ -127,6 +137,9 @@ def test_wrapper_enforces_model_reasoning_privacy_and_no_tools() -> None:
     }
     assert usage.calls[0]["model"] == "gpt-5.6-luna"
     assert usage.calls[0]["reasoning_effort"] == "medium"
+    assert usage.calls[0]["context"]["kind"] == "parse"
+    assert usage.calls[0]["context"]["compact_pages"] == [1]
+    assert usage.calls[0]["context"]["block_count"] == 0
     assert usage.calls[0]["per_page_usage_estimate"] == {
         "input_tokens": 4.0,
         "cached_input_tokens": 1.0,
@@ -164,8 +177,8 @@ def test_block_context_flags_only_confidence_strictly_below_85_percent() -> None
         Block(id="p1-b2", page=1, text="boundary", ocr_score=0.85), True
     )
 
-    assert '"requires_gpt_review":true' in low
-    assert '"requires_gpt_review":false' in boundary
+    assert ",true," in low
+    assert ",false," in boundary
 
 
 def test_missing_api_usage_never_becomes_a_zero_cost_claim() -> None:
@@ -243,6 +256,10 @@ def test_balanced_and_high_accuracy_use_different_context_with_all_page_images()
     assert '<PAGE_CONTEXT page="1" detail="full">' in prompt
     assert '<PAGE_CONTEXT page="2" detail="compact">' in prompt
     assert sum(item["type"] == "input_image" for item in balanced_content) == 2
+    assert all(
+        item["detail"] == "high" for item in balanced_content if item["type"] == "input_image"
+    )
+    assert balanced_responses.calls[0]["input"][0]["content"][0]["text"] == prompt
 
     accurate_responses = FakeResponses()
     OpenAIRefiner(client=SimpleNamespace(responses=accurate_responses)).refine(
@@ -253,6 +270,46 @@ def test_balanced_and_high_accuracy_use_different_context_with_all_page_images()
     assert '<PAGE_CONTEXT page="1" detail="full">' in accurate_prompt
     assert '<PAGE_CONTEXT page="2" detail="full">' in accurate_prompt
     assert sum(item["type"] == "input_image" for item in accurate_content) == 2
+    assert all(
+        item["detail"] == "high" for item in accurate_content if item["type"] == "input_image"
+    )
+
+
+def test_context_rows_are_lossless_and_smaller_than_repeated_key_objects() -> None:
+    block = Block(
+        id="p1-b1",
+        page=1,
+        text="Invoice total $123.45",
+        type="key_value",
+        ocr_score=0.82,
+        bbox=[0.1, 0.2, 0.8, 0.3],
+        polygon=[[10, 20], [80, 20], [80, 30], [10, 30]],
+    )
+    rendered, _ = OpenAIRefiner._block_context(block, True)
+    row = json.loads(rendered)
+
+    assert row == [
+        block.id,
+        block.type,
+        block.text,
+        block.ocr_score,
+        block.bbox,
+        True,
+        block.polygon,
+    ]
+    repeated_keys = json.dumps(
+        {
+            "id": block.id,
+            "type": block.type,
+            "text": block.text,
+            "confidence": block.ocr_score,
+            "bbox": block.bbox,
+            "requires_gpt_review": True,
+            "polygon": block.polygon,
+        },
+        separators=(",", ":"),
+    )
+    assert len(rendered) < len(repeated_keys)
 
 
 def test_prompt_composition_is_capability_specific_and_escapes_document_delimiters() -> None:
@@ -282,6 +339,8 @@ def test_prompt_composition_is_capability_specific_and_escapes_document_delimite
     assert "## Split" not in prompt
     assert prompt.count("</DOCUMENT_EVIDENCE>") == 1
     assert "\\u003c/DOCUMENT_EVIDENCE\\u003e" in prompt
+    assert prompt.index("## Parse and refine") < prompt.index("<APPLICATION_CONFIGURATION>")
+    assert prompt.index("<APPLICATION_CONFIGURATION>") < prompt.index("<DOCUMENT_EVIDENCE>")
     assert {resource.name for resource in resources} >= {
         "capability-parse.md",
         "capability-extract.md",
@@ -320,6 +379,35 @@ def test_oversized_page_context_is_isolated_but_never_truncated() -> None:
     ).refine([page], set(), {"Parse"}, [], None)
 
     assert text in responses.kwargs["input"][0]["content"][0]["text"]
+    context = responses.calls[0]["input"][0]["content"][0]["text"]
+    assert len(context) > 10
+
+
+def test_batch_budget_uses_rendered_evidence_and_preserves_page_order() -> None:
+    pages = [
+        PageParse(
+            page=number,
+            width=100,
+            height=100,
+            blocks=[Block(id=f"p{number}-b1", page=number, text=f"page-{number}")],
+            image_bytes=_jpeg(),
+        )
+        for number in (1, 2)
+    ]
+    sizing_refiner = OpenAIRefiner(client=SimpleNamespace())
+    one_page_size = sizing_refiner._prompt_packet(pages[:1], set(), {"Parse"}, [], None).metrics[
+        "evidence_characters"
+    ]
+    responses = FakeResponses()
+
+    _, usage = OpenAIRefiner(
+        client=SimpleNamespace(responses=responses),
+        settings=Settings(cloud_batch_characters=one_page_size),
+    ).refine(pages, set(), {"Parse"}, [], None)
+
+    assert [call["pages"] for call in usage.calls] == [[1], [2]]
+    assert "page-1" in responses.calls[0]["input"][0]["content"][0]["text"]
+    assert "page-2" in responses.calls[1]["input"][0]["content"][0]["text"]
 
 
 def test_repair_request_is_structured_bounded_and_uses_same_model_policy() -> None:

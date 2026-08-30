@@ -133,6 +133,21 @@ def test_usage_panel_shows_current_and_cumulative_session_totals() -> None:
         output_cost_usd=0.000048,
         total_cost_usd=0.0000844,
         cost_status="exact",
+        calls=[
+            {
+                "purpose": "refinement",
+                "pages": [1],
+                "image_pages": [1],
+                "context": {
+                    "kind": "parse",
+                    "prompt_characters": 120,
+                    "evidence_characters": 50,
+                    "block_count": 3,
+                    "compact_pages": [1],
+                    "full_context_pages": [],
+                },
+            }
+        ],
     )
     prior_usage = UsageRecord(
         call_count=1,
@@ -181,6 +196,9 @@ def test_usage_panel_shows_current_and_cumulative_session_totals() -> None:
     assert metrics["Session total tokens"] == "360"
     assert metrics["Current GPT calls"] == "2"
     assert metrics["RapidOCR API cost"] == "$0.00"
+    call_table = next(frame.value for frame in app.dataframe if "context_kind" in frame.value)
+    assert call_table["context_kind"][0] == "parse"
+    assert call_table["evidence_characters"][0] == 50
 
 
 def test_checkbox_review_records_audited_user_decision() -> None:

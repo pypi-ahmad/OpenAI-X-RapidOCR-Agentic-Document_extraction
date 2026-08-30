@@ -314,6 +314,7 @@ See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for commands and code style, an
 - [Getting started](docs/GETTING-STARTED.md)
 - [Configuration](docs/CONFIGURATION.md)
 - [Architecture](docs/architecture.md)
+- [Context engineering](docs/CONTEXT-ENGINEERING.md)
 - [Local API](docs/API.md)
 - [Development](docs/DEVELOPMENT.md)
 - [Testing](docs/TESTING.md)

@@ -6,6 +6,7 @@ import base64
 import io
 import json
 import time
+from dataclasses import dataclass
 from typing import Annotated, Any, Literal, cast
 
 from openai import OpenAI
@@ -32,6 +33,25 @@ _CAPABILITY_PROMPTS = {
     "Split": "capability-split.md",
     "Extract": "capability-extract.md",
 }
+
+_COMPACT_BLOCK_COLUMNS = [
+    "id",
+    "type",
+    "text",
+    "confidence",
+    "bbox",
+    "requires_gpt_review",
+]
+_FULL_BLOCK_COLUMNS = [*_COMPACT_BLOCK_COLUMNS, "polygon"]
+_GROUNDING_COLUMNS = ["page", "block_id", "chunk_id", "type", "confidence", "bbox", "text"]
+
+
+@dataclass(frozen=True, slots=True)
+class _ContextPacket:
+    text: str
+    resources: list[PromptResource]
+    metrics: dict[str, Any]
+
 
 type StructuredFieldValue = Annotated[
     Any,
@@ -232,13 +252,20 @@ class OpenAIRefiner:
         allowed_classes: list[str],
         extraction_schema: dict[str, Any] | None,
     ) -> tuple[CloudResult, UsageRecord]:
+        full_context_pages = image_pages
         aggregate = CloudResult(refined_markdown="", reviewed_pages=[])
         call_usages: list[UsageRecord] = []
-        batches = self._batches(pages)
+        batches = self._batches(
+            pages,
+            full_context_pages,
+            capabilities,
+            allowed_classes,
+            extraction_schema,
+        )
         for batch in batches:
-            prompt, prompt_resources = self._prompt(
+            packet = self._prompt_packet(
                 batch,
-                image_pages,
+                full_context_pages,
                 capabilities,
                 allowed_classes,
                 extraction_schema,
@@ -246,7 +273,7 @@ class OpenAIRefiner:
             content: list[dict[str, Any]] = [
                 {
                     "type": "input_text",
-                    "text": prompt,
+                    "text": packet.text,
                 }
             ]
             for page in batch:
@@ -283,8 +310,12 @@ class OpenAIRefiner:
             aggregate.splits.extend(parsed.splits)
             aggregate.extracted_fields.extend(parsed.extracted_fields)
             aggregate.checkboxes.extend(parsed.checkboxes)
-            resources = list(prompt_resources)
+            resources = list(packet.resources)
             resources.append(visual_resource)
+            context = dict(packet.metrics)
+            context["prompt_characters"] = sum(
+                len(item["text"]) for item in content if item["type"] == "input_text"
+            )
             call = self._read_usage(
                 response,
                 batch,
@@ -292,6 +323,7 @@ class OpenAIRefiner:
                 elapsed,
                 resources,
                 purpose="refinement",
+                context=context,
             )
             call_usages.append(call)
         if len(batches) > 1 and capabilities - {"Parse"}:
@@ -322,45 +354,41 @@ class OpenAIRefiner:
         if not requested:
             return CloudResult(refined_markdown=markdown, reviewed_pages=[]), UsageRecord()
         capability_instructions, capability_resources = self._capability_instructions(requested)
-        grounding = [
-            {
-                "page": page.page,
-                "blocks": [
-                    {
-                        "id": block.id,
-                        "chunk_id": next(
-                            (
-                                chunk.id
-                                for chunk in (page.chunks or build_layout_chunks(page.blocks))
-                                if block.id in chunk.source_block_ids
-                            ),
+        grounding = []
+        for page in pages:
+            chunks = page.chunks or build_layout_chunks(page.blocks)
+            for block in page.blocks:
+                grounding.append(
+                    [
+                        page.page,
+                        block.id,
+                        next(
+                            (chunk.id for chunk in chunks if block.id in chunk.source_block_ids),
                             None,
                         ),
-                        "bbox": block.bbox,
-                        "confidence": block.ocr_score,
-                        "text": block.text,
-                        "type": block.type,
-                    }
-                    for block in page.blocks
-                ],
-            }
-            for page in pages
-        ]
+                        block.type,
+                        block.ocr_score,
+                        block.bbox,
+                        block.text,
+                    ]
+                )
+        grounding_json = _prompt_json(grounding)
+        issues_json = _prompt_json(issues or [])
+        prior_json = _prompt_json(prior.model_dump(mode="json") if prior else None)
         prompt, prompt_resource = render_prompt(
             "markdown-workflow.md",
             capabilities=_prompt_json(sorted(requested)),
             allowed_classes=_prompt_json([*allowed_classes, "unknown"]),
             extraction_schema=_prompt_json(extraction_schema),
             capability_instructions=capability_instructions,
-            validation_issues=_prompt_json(issues or []),
-            prior_proposal=_prompt_json(prior.model_dump(mode="json") if prior else None),
-            grounding_index=_prompt_json(grounding),
+            validation_issues=issues_json,
+            prior_proposal=prior_json,
+            grounding_columns=_prompt_json(_GROUNDING_COLUMNS),
+            grounding_rows=grounding_json,
             document_markdown=markdown,
         )
         started = time.perf_counter()
-        response = self._request(
-            [{"type": "input_text", "text": prompt}], MarkdownWorkflowResult
-        )
+        response = self._request([{"type": "input_text", "text": prompt}], MarkdownWorkflowResult)
         elapsed = time.perf_counter() - started
         parsed = response.output_parsed
         if parsed is None:
@@ -384,6 +412,19 @@ class OpenAIRefiner:
             elapsed,
             [prompt_resource, *capability_resources],
             purpose="markdown_workflow_repair" if issues else "markdown_workflow",
+            context={
+                "kind": "grounded_markdown",
+                "prompt_characters": len(prompt),
+                "evidence_characters": (
+                    len(markdown) + len(grounding_json) + len(issues_json) + len(prior_json)
+                ),
+                "source_text_characters": sum(
+                    len(block.text) for page in pages for block in page.blocks
+                ),
+                "block_count": len(grounding),
+                "compact_pages": [],
+                "full_context_pages": [],
+            },
         )
         return cloud, usage
 
@@ -449,6 +490,19 @@ class OpenAIRefiner:
             [prompt_resource, visual_resource],
             purpose="checkbox_verification",
             checkbox_ids=expected,
+            context={
+                "kind": "checkbox_verification",
+                "prompt_characters": sum(
+                    len(item["text"]) for item in content if item["type"] == "input_text"
+                ),
+                "evidence_characters": len(_prompt_json(evidence)),
+                "source_text_characters": sum(
+                    len(item.quote) for candidate in candidates for item in candidate.evidence
+                ),
+                "block_count": len(candidates),
+                "compact_pages": [],
+                "full_context_pages": [],
+            },
         )
         return parsed, usage
 
@@ -462,8 +516,12 @@ class OpenAIRefiner:
     ) -> tuple[CloudResult, UsageRecord]:
         summaries: list[str] = []
         context_resources: list[PromptResource] = []
+        represented_blocks = 0
+        represented_source_characters = 0
         for page in pages:
             blocks = page.blocks[:2] + page.blocks[-2:] if len(page.blocks) > 4 else page.blocks
+            represented_blocks += len(blocks)
+            represented_source_characters += sum(len(block.text) for block in blocks)
             block_summaries: list[str] = []
             for block in blocks:
                 summary, resource = render_prompt(
@@ -482,14 +540,16 @@ class OpenAIRefiner:
         capability_instructions, capability_resources = self._capability_instructions(
             capabilities - {"Parse"}
         )
+        candidates_json = _prompt_json(candidates.model_dump(mode="json"))
+        summaries_text = "\n".join(summaries)
         prompt, prompt_resource = render_prompt(
             "reconciliation.md",
             capabilities=_prompt_json(sorted(capabilities)),
             allowed_classes=_prompt_json([*allowed_classes, "unknown"]),
             extraction_schema=_prompt_json(extraction_schema),
             capability_instructions=capability_instructions,
-            batch_candidates=_prompt_json(candidates.model_dump(mode="json")),
-            document_summaries="\n".join(summaries),
+            batch_candidates=candidates_json,
+            document_summaries=summaries_text,
         )
         started = time.perf_counter()
         response = self._request([{"type": "input_text", "text": prompt}])
@@ -507,6 +567,15 @@ class OpenAIRefiner:
             elapsed,
             [prompt_resource, *capability_resources, *context_resources],
             purpose="reconciliation",
+            context={
+                "kind": "reconciliation",
+                "prompt_characters": len(prompt),
+                "evidence_characters": len(candidates_json) + len(summaries_text),
+                "source_text_characters": represented_source_characters,
+                "block_count": represented_blocks,
+                "compact_pages": [],
+                "full_context_pages": [],
+            },
         )
 
     def repair(
@@ -520,14 +589,16 @@ class OpenAIRefiner:
         prior: CloudResult,
     ) -> tuple[CloudResult, UsageRecord]:
         """Run one application-bounded correction pass over unresolved proposals."""
-        base_prompt, base_resources = self._prompt(
+        packet = self._prompt_packet(
             pages, image_pages, capabilities, allowed_classes, extraction_schema
         )
+        issues_json = _prompt_json(issues)
+        prior_json = _prompt_json(prior.model_dump(mode="json"))
         prompt, repair_resource = render_prompt(
             "repair.md",
-            base_prompt=base_prompt,
-            validation_issues=_prompt_json(issues),
-            prior_proposal=_prompt_json(prior.model_dump(mode="json")),
+            base_prompt=packet.text,
+            validation_issues=issues_json,
+            prior_proposal=prior_json,
         )
         content: list[dict[str, Any]] = [{"type": "input_text", "text": prompt}]
         for page in pages:
@@ -554,24 +625,49 @@ class OpenAIRefiner:
         expected_pages = sorted(page.page for page in pages)
         if sorted(parsed.reviewed_pages) != expected_pages:
             raise RuntimeError("GPT-5.6-luna repair must review every requested page exactly once.")
-        resources = [*base_resources, repair_resource]
+        resources = [*packet.resources, repair_resource]
         if image_pages:
             resources.append(visual_resource)
+        context = dict(packet.metrics)
+        context["kind"] = "repair"
+        context["prompt_characters"] = sum(
+            len(item["text"]) for item in content if item["type"] == "input_text"
+        )
+        context["evidence_characters"] += len(issues_json) + len(prior_json)
         return parsed, self._read_usage(
-            response, pages, image_pages, elapsed, resources, purpose="repair"
+            response,
+            pages,
+            image_pages,
+            elapsed,
+            resources,
+            purpose="repair",
+            context=context,
         )
 
-    def _batches(self, pages: list[PageParse]) -> list[list[PageParse]]:
+    def _batches(
+        self,
+        pages: list[PageParse],
+        full_context_pages: set[int],
+        capabilities: set[str],
+        allowed_classes: list[str],
+        extraction_schema: dict[str, Any] | None,
+    ) -> list[list[PageParse]]:
         batches: list[list[PageParse]] = []
         current: list[PageParse] = []
-        size = 0
         for page in pages:
-            page_size = sum(len(block.text) for block in page.blocks)
-            if current and size + page_size > self.settings.cloud_batch_characters:
+            candidate = [*current, page]
+            candidate_size = self._prompt_packet(
+                candidate,
+                full_context_pages,
+                capabilities,
+                allowed_classes,
+                extraction_schema,
+            ).metrics["evidence_characters"]
+            if current and candidate_size > self.settings.cloud_batch_characters:
                 batches.append(current)
-                current, size = [], 0
-            current.append(page)
-            size += page_size
+                current = [page]
+            else:
+                current = candidate
         if current:
             batches.append(current)
         return batches
@@ -627,6 +723,7 @@ class OpenAIRefiner:
         prompt_resources: list[PromptResource] | None = None,
         purpose: str = "refinement",
         checkbox_ids: list[str] | None = None,
+        context: dict[str, Any] | None = None,
     ) -> UsageRecord:
         usage = getattr(response, "usage", None)
         input_tokens = getattr(usage, "input_tokens", None)
@@ -657,6 +754,8 @@ class OpenAIRefiner:
             for item in dict.fromkeys(resources)
         ]
         call["checkbox_ids"] = checkbox_ids or []
+        if context is not None:
+            call["context"] = context
         page_count = len(page_numbers)
         call["per_page_usage_estimate"] = {
             "input_tokens": input_tokens / page_count if input_tokens is not None else None,
@@ -704,6 +803,23 @@ class OpenAIRefiner:
         allowed_classes: list[str],
         extraction_schema: dict[str, Any] | None,
     ) -> tuple[str, list[PromptResource]]:
+        packet = self._prompt_packet(
+            pages,
+            full_context_pages,
+            capabilities,
+            allowed_classes,
+            extraction_schema,
+        )
+        return packet.text, packet.resources
+
+    def _prompt_packet(
+        self,
+        pages: list[PageParse],
+        full_context_pages: set[int],
+        capabilities: set[str],
+        allowed_classes: list[str],
+        extraction_schema: dict[str, Any] | None,
+    ) -> _ContextPacket:
         lines: list[str] = []
         context_resources: list[PromptResource] = []
         capability_instructions, capability_resources = self._capability_instructions(capabilities)
@@ -726,6 +842,9 @@ class OpenAIRefiner:
                         "warnings": page.warnings,
                     }
                 ),
+                block_columns=_prompt_json(
+                    _FULL_BLOCK_COLUMNS if full_context else _COMPACT_BLOCK_COLUMNS
+                ),
                 blocks="\n".join(blocks),
             )
             lines.append(page_context)
@@ -740,12 +859,30 @@ class OpenAIRefiner:
             checkbox_instructions=checkbox_instructions,
             document_context=ocr,
         )
-        return rendered, [
-            resource,
-            *capability_resources,
-            checkbox_resource,
-            *context_resources,
-        ]
+        return _ContextPacket(
+            text=rendered,
+            resources=[
+                resource,
+                *capability_resources,
+                checkbox_resource,
+                *context_resources,
+            ],
+            metrics={
+                "kind": "parse",
+                "prompt_characters": len(rendered),
+                "evidence_characters": len(ocr),
+                "source_text_characters": sum(
+                    len(block.text) for page in pages for block in page.blocks
+                ),
+                "block_count": sum(len(page.blocks) for page in pages),
+                "compact_pages": [
+                    page.page for page in pages if page.page not in full_context_pages
+                ],
+                "full_context_pages": [
+                    page.page for page in pages if page.page in full_context_pages
+                ],
+            },
+        )
 
     @staticmethod
     def _capability_instructions(
@@ -770,15 +907,15 @@ class OpenAIRefiner:
             return render_prompt(
                 "block-context-full.md",
                 block_json=_prompt_json(
-                    {
-                        "bbox": block.bbox,
-                        "confidence": block.ocr_score,
-                        "id": block.id,
-                        "polygon": block.polygon,
-                        "requires_gpt_review": requires_gpt_review,
-                        "text": block.text,
-                        "type": block.type,
-                    }
+                    [
+                        block.id,
+                        block.type,
+                        block.text,
+                        block.ocr_score,
+                        block.bbox,
+                        requires_gpt_review,
+                        block.polygon,
+                    ]
                 ),
             )
         bbox = [round(value, 4) for value in block.bbox] if block.bbox else None
@@ -786,13 +923,6 @@ class OpenAIRefiner:
         return render_prompt(
             "block-context-compact.md",
             block_json=_prompt_json(
-                {
-                    "bbox": bbox,
-                    "confidence": confidence,
-                    "id": block.id,
-                    "requires_gpt_review": requires_gpt_review,
-                    "text": block.text,
-                    "type": block.type,
-                }
+                [block.id, block.type, block.text, confidence, bbox, requires_gpt_review]
             ),
         )

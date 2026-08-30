@@ -1,3 +1,3 @@
-<!-- prompt-version: 2 -->
+<!-- prompt-version: 3 -->
 
-<OCR_BLOCK>$block_json</OCR_BLOCK>
+$block_json

@@ -154,3 +154,4 @@ type checking.
 - [Development guide](DEVELOPMENT.md) — local setup, project commands, and
   coding conventions.
 - [Local API reference](API.md) — endpoint contracts and API testing context.
+- [Context engineering](CONTEXT-ENGINEERING.md) — lossless payload, batching, and telemetry checks.

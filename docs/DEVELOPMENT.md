@@ -127,4 +127,5 @@ process is present in this checkout. For locally prepared changes:
 - Document any user-visible behavior or configuration change without including
   credentials.
 
-See [Testing](TESTING.md) for focused test commands and coverage behavior.
+See [Testing](TESTING.md) for focused test commands and coverage behavior, and
+[Context engineering](CONTEXT-ENGINEERING.md) before changing Luna payloads or prompt order.

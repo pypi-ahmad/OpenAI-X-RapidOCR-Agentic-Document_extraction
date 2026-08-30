@@ -1,0 +1,58 @@
+# Context engineering
+
+The application optimizes context without removing evidence. Accuracy and auditability take
+priority over token reduction.
+
+## Runtime context contract
+
+RapidOCR remains the source of local text, geometry, confidence, and initial layout. Each Parse
+request sends every selected page image to GPT-5.6-luna at high detail. Balanced mode uses compact
+OCR rows by default and full rows for routed uncertainty or complexity; High Accuracy uses full
+rows for every selected page.
+
+Block columns are declared once per page and values are serialized as deterministic JSON rows.
+Compact rows retain block ID, type, text, confidence, normalized bounding box, and the low-confidence
+review flag. Full rows additionally retain the OCR polygon and page metadata. No row is sampled,
+truncated, or omitted.
+
+Optional Classify, Section, Split, and Extract calls receive the canonical refined Markdown plus a
+lossless grounding table containing page, block ID, chunk ID, type, confidence, bounding box, and
+raw source text. This deliberate duplication lets GPT cite exact raw evidence after Markdown
+structure has been refined.
+
+## Prompt order and batching
+
+The stable `policy.md` resource is sent as OpenAI instructions. Capability rules precede dynamic
+configuration and document evidence in user prompts so repeated prefixes remain cache-friendly.
+All instructions live in versioned Markdown prompt resources.
+
+`cloud_batch_characters` limits rendered evidence characters, not estimated tokens. Pages remain in
+source order. A page that exceeds the limit is isolated in one request and is never truncated.
+Image tokens and provider tokenization are not inferred from character counts.
+
+## Telemetry
+
+Every usage call may include a `context` object:
+
+| Field | Meaning |
+| --- | --- |
+| `kind` | Parse, grounded Markdown, repair, reconciliation, or checkbox verification context |
+| `prompt_characters` | Complete rendered text prompt length |
+| `evidence_characters` | Dynamic evidence length used for batching and diagnostics |
+| `source_text_characters` | Sum of source OCR text characters represented by the call |
+| `block_count` | Evidence block or checkbox-candidate count |
+| `compact_pages` | Pages represented with compact OCR rows |
+| `full_context_pages` | Pages represented with full OCR/layout rows |
+
+The Usage & Cost panel and export manifest expose these measurements alongside provider-reported
+tokens and costs. Character counts are exact diagnostics but are never presented as token or price
+estimates.
+
+## Maintenance rules
+
+- Preserve the column order and update its prompt declaration and tests together.
+- Keep dynamic document content after the stable instruction prefix.
+- Prefer one combined downstream capability call over duplicate calls.
+- Measure serialization changes with deterministic fixtures and verify every source field survives.
+- Do not reduce image coverage or evidence fields without an explicit product decision and an
+  accuracy evaluation.

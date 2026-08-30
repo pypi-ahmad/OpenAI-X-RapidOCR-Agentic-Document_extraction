@@ -215,3 +215,5 @@ status.
    one, then falls back to the conventional `CUDAExecutionProvider` plus GPU
    device check. After the first OCR call, the detector session provider list is
    inspected; if CUDA is absent, engine provenance is changed to CPU.
+6. Luna context uses lossless row serialization and rendered-evidence batching.
+   See [Context engineering](CONTEXT-ENGINEERING.md) for the payload and telemetry contract.

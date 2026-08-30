@@ -87,13 +87,21 @@ def _call_rows(calls: list[dict]) -> list[dict]:
     for number, call in enumerate(calls, 1):
         tokens = call.get("tokens", {})
         cost = call.get("cost", {})
+        context = call.get("context", {})
         rows.append(
             {
                 "call": number,
+                "purpose": call.get("purpose"),
                 "model": call.get("model"),
                 "effort": call.get("reasoning_effort"),
                 "pages": call.get("pages"),
                 "image_pages": call.get("image_pages"),
+                "context_kind": context.get("kind"),
+                "prompt_characters": context.get("prompt_characters"),
+                "evidence_characters": context.get("evidence_characters"),
+                "evidence_blocks": context.get("block_count"),
+                "compact_pages": context.get("compact_pages"),
+                "full_context_pages": context.get("full_context_pages"),
                 "input_tokens": tokens.get("input_tokens"),
                 "cached_input_tokens": tokens.get("cached_input_tokens"),
                 "output_tokens": tokens.get("output_tokens"),
@@ -654,10 +662,7 @@ if workflow := st.session_state.workflow:
     )
 
 st.subheader(":material/payments: Usage & Cost")
-st.caption(
-    "Per 1M tokens: input $0.20 · cached input $0.02 · "
-    "cache writes $0.25 · output $1.20"
-)
+st.caption("Per 1M tokens: input $0.20 · cached input $0.02 · cache writes $0.25 · output $1.20")
 current = st.session_state.result
 history = [
     entry

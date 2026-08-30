@@ -34,9 +34,17 @@ def test_versioned_prompts_are_packaged_markdown_resources() -> None:
     for name in expected:
         prompt = load_prompt(name)
         expected_version = (
-            "1"
-            if name == "markdown-workflow.md"
-            else ("3" if name == "capability-parse.md" else "2")
+            "3"
+            if name
+            in {
+                "refinement.md",
+                "page-context-full.md",
+                "page-context-compact.md",
+                "block-context-full.md",
+                "block-context-compact.md",
+                "capability-parse.md",
+            }
+            else "2"
         )
         assert prompt.version == expected_version
         assert len(prompt.sha256) == 64
