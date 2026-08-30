@@ -24,9 +24,7 @@ else:
     if review_fields:
         with st.expander(":material/rate_review: Field review", expanded=True):
             selected_path = st.selectbox("Field", [field.path for field in review_fields])
-            selected_field = next(
-                field for field in review_fields if field.path == selected_path
-            )
+            selected_field = next(field for field in review_fields if field.path == selected_path)
             page = next(
                 (
                     item

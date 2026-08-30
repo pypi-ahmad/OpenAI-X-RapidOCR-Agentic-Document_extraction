@@ -78,8 +78,7 @@ def calculate_usage_cost(usage: TokenUsage) -> CostBreakdown:
         output_multiplier,
         (
             "exact"
-            if usage.cached_input_tokens is not None
-            and usage.cache_write_input_tokens is not None
+            if usage.cached_input_tokens is not None and usage.cache_write_input_tokens is not None
             else "estimate"
         ),
     )

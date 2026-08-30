@@ -170,9 +170,7 @@ def refine_local_parse(
     return local
 
 
-def _record_low_confidence_reviews(
-    local: LocalParseResult, request: DocumentRequest
-) -> None:
+def _record_low_confidence_reviews(local: LocalParseResult, request: DocumentRequest) -> None:
     if request.mode is not ProcessingMode.HIGH_ACCURACY:
         return
     records_by_block: dict[str, list[RefinementRecord]] = {}

@@ -261,13 +261,13 @@ def test_extract_reuses_the_canonical_parse_without_rerunning_rapidocr() -> None
                     refined_markdown=markdown,
                     reviewed_pages=[1],
                     extracted_fields=[
-                    ExtractedField(
-                        path="invoice_id",
-                        value="42",
-                        status="verified",
-                        confidence=0.9,
-                        evidence=[CloudEvidence(page=1, block_id="p1-b1", quote="Invoice")],
-                    )
+                        ExtractedField(
+                            path="invoice_id",
+                            value="42",
+                            status="verified",
+                            confidence=0.9,
+                            evidence=[CloudEvidence(page=1, block_id="p1-b1", quote="Invoice")],
+                        )
                     ],
                 ),
                 UsageRecord(call_count=1),
@@ -376,10 +376,7 @@ def test_mocked_dual_engine_api_flow_exports_audited_bundle() -> None:
     assert len(responses.calls) == 2
     assert all(call["model"] == "gpt-5.6-luna" for call in responses.calls)
     assert all(call["reasoning"] == {"effort": "medium"} for call in responses.calls)
-    assert all(
-        item["type"] == "input_text"
-        for item in responses.calls[1]["input"][0]["content"]
-    )
+    assert all(item["type"] == "input_text" for item in responses.calls[1]["input"][0]["content"])
 
     bundle = client.get(f"/api/v1/jobs/{job_id}/artifacts/bundle.zip")
     with zipfile.ZipFile(io.BytesIO(bundle.content)) as archive:

@@ -280,7 +280,7 @@ def _standalone_html(result: LocalParseResult) -> str:
                 f'<li data-grounding-id="{html.escape(region["id"])}" '
                 f'data-block-type="{html.escape(region["type"])}" data-reading-order="{order}" '
                 f'data-bbox="{bbox}"><code>{html.escape(region["id"])}</code> · '
-                f'{html.escape(region["type"])} · confidence {confidence} · '
+                f"{html.escape(region['type'])} · confidence {confidence} · "
                 f"bbox [{bbox}]</li>"
             )
         for checkbox in (item for item in result.checkboxes if item.page == page.page):
@@ -290,7 +290,7 @@ def _standalone_html(result: LocalParseResult) -> str:
                 f'data-checkbox-id="{html.escape(checkbox.id)}" '
                 f'data-checkbox-state="{html.escape(checkbox.state.value)}" '
                 f'data-bbox="{bbox}"><code>{html.escape(checkbox.id)}</code> · '
-                f'{html.escape(checkbox.label)} · {html.escape(checkbox.state.value)} · '
+                f"{html.escape(checkbox.label)} · {html.escape(checkbox.state.value)} · "
                 f"bbox [{bbox}]</li>"
             )
         fallback = result.markdown if len(result.pages) == 1 else ""
