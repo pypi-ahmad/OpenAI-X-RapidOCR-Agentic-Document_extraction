@@ -1,3 +1,4 @@
+<!-- generated-by: gsd-doc-writer -->
 # Context engineering
 
 The application optimizes context without removing evidence. Accuracy and auditability take
@@ -24,7 +25,9 @@ structure has been refined.
 
 The stable `policy.md` resource is sent as OpenAI instructions. Capability rules precede dynamic
 configuration and document evidence in user prompts so repeated prefixes remain cache-friendly.
-All instructions live in versioned Markdown prompt resources.
+Reusable instructions and prompt templates live in versioned Markdown prompt resources. Model-facing
+structured-output constraints also live in Pydantic response-schema field descriptions in
+`openai_refiner.py`.
 
 `cloud_batch_characters` limits rendered evidence characters, not estimated tokens. Pages remain in
 source order. A page that exceeds the limit is isolated in one request and is never truncated.
@@ -44,9 +47,10 @@ Every usage call may include a `context` object:
 | `compact_pages` | Pages represented with compact OCR rows |
 | `full_context_pages` | Pages represented with full OCR/layout rows |
 
-The Usage & Cost panel and export manifest expose these measurements alongside provider-reported
-tokens and costs. Character counts are exact diagnostics but are never presented as token or price
-estimates.
+The export manifest exposes all of these measurements. The Usage & Cost panel exposes context kind,
+prompt and evidence characters, block count, compact pages, and full-context pages alongside
+provider-reported tokens and costs; `source_text_characters` remains manifest-only. Character counts
+are exact diagnostics but are never presented as token or price estimates.
 
 ## Maintenance rules
 

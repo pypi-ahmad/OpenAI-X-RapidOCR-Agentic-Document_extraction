@@ -16,6 +16,7 @@ The application accepts PDFs and common images, preserves OCR evidence and coord
 - Runs classification, sectioning, multi-document splitting, schema extraction, deterministic validation, and review routing.
 - Accepts JSON Schema, guided field definitions, or Markdown field descriptions.
 - Reports page-quality heuristics, workflow progress, token usage, and GPT cost.
+- Provides session-only document chat grounded exclusively in generated Parse Markdown.
 - Exposes an optional typed, versioned FastAPI interface over the same pipeline.
 
 ## Technology stack
@@ -76,6 +77,8 @@ $env:OPENAI_API_KEY = "<your key>"
 
 3. Upload a supported document, select the pages and processing mode, define any optional workflow inputs, then choose **Extract document**.
 
+4. Open **Chat**, select one or more processed documents, and ask questions grounded in their generated Markdown.
+
 On Windows, run [`run_app.cmd`](run_app.cmd) instead. The launcher displays logs in the foreground, identifies the PIDs listening on TCP port `8841`, revalidates each listener, and force-stops only verified listeners on that port before startup. It keeps the console open after an error or normal exit.
 
 The installed console script is another equivalent entry point:
@@ -83,6 +86,18 @@ The installed console script is another equivalent entry point:
 ```powershell
 uv run agentic-extractor
 ```
+
+## Usage examples
+
+- **Parse a selected page range:** Upload a PDF on **Parse**, choose an inclusive start and end
+  page, then run extraction to produce grounded Markdown, Parse JSON, HTML, an annotated PDF, and
+  the ZIP bundle.
+- **Extract structured fields:** Process a document, open **Extract**, and supply JSON Schema,
+  guided fields, or Markdown field descriptions. The result includes source grounding, validation
+  status, and review reasons for uncertain fields.
+- **Ask document-grounded questions:** After Parse completes, open **Chat**, select one or more
+  processed documents, and ask a question. Answers use only retrieved excerpts from the generated
+  Markdown and show their cited excerpts.
 
 ## How extraction works
 
@@ -132,6 +147,23 @@ VALIDATED -> NORMALIZED -> PARSED -> CLASSIFIED -> SECTIONED -> SPLIT
 
 Document text is treated as untrusted data. It cannot change application policy, tools, routing, schemas, or permissions.
 
+## Document chat
+
+The **Chat** page answers questions, summarizes, explains, compares, and locates information using
+only generated Parse Markdown from documents processed during the current browser session. The
+chat request never receives uploaded files, page images, OCR objects, artifact bytes, or external
+knowledge. The page displays the active document scope and cited Markdown excerpts beneath each
+grounded answer.
+
+For short scopes, all generated Markdown is available to Luna. Longer scopes use local
+page-and-heading-aware retrieval with a bounded context budget. Changing the selected documents
+starts a new conversation so facts cannot leak between scopes. Off-topic requests are redirected,
+unsupported questions receive an explicit insufficient-evidence response, and instructions found
+inside document text or user messages cannot change the document-only policy.
+
+Processed chat sources and conversation history are held only in Streamlit session state. They are
+lost when the browser session or server ends, and **Reset** clears them immediately.
+
 ## Structured extraction schemas
 
 The sidebar supports three inputs that normalize into the same internal schema:
@@ -168,11 +200,11 @@ Validation covers required fields, data types, date formats, identifier patterns
 Each successful run exposes:
 
 - rendered and raw Markdown
-- `document.md`
-- `parse-result.json` with the canonical evidence-bearing Parse contract
+- generated Markdown download artifact
+- generated JSON ZIP artifact with the canonical evidence-bearing Parse contract
 - `annotated.pdf` showing OCR and layout regions from real geometry
-- `document.html`, standalone semantic HTML rendered from refined Markdown with page and grounding context
-- `bundle.zip` containing all artifacts, checkbox evidence crops, and `manifest.json`
+- generated HTML download artifact, standalone semantic HTML rendered from refined Markdown with page and grounding context
+- ZIP bundle containing all artifacts, checkbox evidence crops, and a generated JSON manifest
 
 The HTML view renders refined Markdown without embedding source-page images. It preserves selected-page boundaries and includes expandable block IDs, coordinates, confidence, and checkbox grounding. The manifest records selected pages, hashes, engine and model metadata, workflow decisions, refinements, usage, cost assumptions, warnings, and failures.
 
@@ -265,7 +297,7 @@ The implementation separates ingestion, OCR, parsing, refinement, workflows, mod
 |-- .streamlit/config.toml      Streamlit server and theme configuration
 |-- app.py                      Streamlit navigation entry point
 |-- streamlit_app.py            Parse workspace
-|-- app_pages/                  Classify, Section, Split, and Extract pages
+|-- app_pages/                  Classify, Section, Split, Extract, and document Chat pages
 |-- run_app.cmd                 Windows foreground launcher for port 8841
 |-- src/agentic_extractor/      Canonical models, pipeline, workflows, API, and artifacts
 |-- tests/                      Focused unit and integration tests
@@ -299,6 +331,10 @@ It checks curated grounding, abstention, and checkbox cases; it is not a real-wo
 
 See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for commands and code style, and [`docs/TESTING.md`](docs/TESTING.md) for test organization and focused runs.
 
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for guidelines.
+
 ## Limitations
 
 - Both RapidOCR and valid OpenAI model access are required; offline-only and OCR-only successful workflows are intentionally unsupported.
@@ -308,6 +344,8 @@ See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for commands and code style, an
 - Balanced routing and image-quality diagnostics use explicit heuristics rather than calibrated accuracy or performance guarantees.
 - Automatic rotation and deskew are not applied without reliable orientation evidence.
 - TIFF behavior depends on formats supported reliably by Pillow.
+- Document chat is session-only. Long-document retrieval is lexical and can miss relevant passages
+  when a question uses substantially different vocabulary from the generated Markdown.
 
 ## Documentation
 

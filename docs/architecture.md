@@ -16,20 +16,30 @@ flowchart LR
     Client["Local API client"] --> API["FastAPI v1"]
     UI --> Workflow["Canonical agent workflow"]
     API --> Workflow
+    UI --> Chat["Markdown-only document chat"]
     Workflow --> Ingest["Document ingestion"]
     Workflow --> OCR["RapidOCR and ONNX Runtime"]
     Workflow --> GPT["OpenAI gpt-5.6-luna"]
     Workflow --> Validation["Deterministic validation"]
     Workflow --> Artifacts["Artifact generation"]
+    Chat --> GPT
 ```
 
-The diagram shows both local entry points converging on one workflow.
+The diagram shows both extraction entry points converging on one workflow and
+the Streamlit-only chat read path consuming processed Markdown separately.
 
 The application is local-machine software. Streamlit is configured for
 `127.0.0.1:8841`; the API is run separately with Uvicorn and its documented
-loopback binding. API jobs and uploaded bytes remain in process memory until
-their configured TTL expires. There is no user, tenant, or authentication
-model.
+loopback binding. API jobs and uploaded bytes expire after their configured TTL,
+but cleanup is lazy: a later job lookup removes expired entries, so entries can
+remain in process memory beyond the TTL when no lookup occurs. There is no user,
+tenant, or authentication model.
+
+Document chat is a separate, session-only read path. It receives generated
+Parse Markdown from Streamlit session state, retrieves relevant Markdown
+excerpts locally, and sends only those excerpts plus bounded recent
+conversation context to Luna. It never receives uploaded file bytes, rendered
+page images, OCR page objects, or artifact contents.
 
 ## Runtime flow
 
@@ -73,7 +83,7 @@ error. There is no successful single-engine fallback.
 |---|---|
 | `app.py` | Streamlit navigation and shared page configuration |
 | `streamlit_app.py` | Parse controls, previews, artifacts, and session usage |
-| `app_pages/` | Separate Classify, Section, Split, and Extract result/review pages |
+| `app_pages/` | Separate Classify, Section, Split, Extract, and document-chat pages |
 | `src/agentic_extractor/ingest.py` | Signature-based PDF/image decoding, size limits, and page selection |
 | `src/agentic_extractor/quality.py` | Heuristic page diagnostics, measured preprocessing, and batch backoff |
 | `src/agentic_extractor/ocr.py` | RapidOCR initialization, page OCR, raw evidence, and engine provenance |
@@ -87,6 +97,7 @@ error. There is no successful single-engine fallback.
 | `src/agentic_extractor/artifacts.py` | Canonical Parse JSON, annotated PDF, semantic HTML, ZIP, and manifest |
 | `src/agentic_extractor/export.py` | Portable ZIP export for the simpler `DocumentResult` boundary |
 | `src/agentic_extractor/costs.py` | Token accounting and centralized rate assumptions |
+| `src/agentic_extractor/document_chat.py` | Session-only processed-document model, Markdown chunking, retrieval, bounded history, and safe fallback text |
 | `src/agentic_extractor/api.py` | Versioned local HTTP façade over `run_agent_workflow` |
 | `src/agentic_extractor/models.py` | Shared request, block, evidence, usage, and result models |
 | `src/agentic_extractor/ui_state.py` | Streamlit lifecycle state and upload identity tracking |
@@ -132,10 +143,10 @@ Missing, rejected, or abstained outcomes become `REVIEW_REQUIRED`. Balanced
 continues to use the same routing and refinement behavior without enforcing
 per-block outcome coverage.
 
-Checkbox discovery is an intentional exception to the former Balanced image-routing optimization:
-every selected page image is supplied so a checkbox invisible to OCR is not skipped. Risky controls
-are verified once more using bounded crops. This improves coverage but remains best-effort and
-increases Balanced-mode image cost.
+Every selected page image is supplied in both modes so visual controls that are
+invisible to OCR are not skipped. Risky checkbox controls are verified once
+more using bounded crops. This improves coverage but remains best-effort and
+adds an additional Luna call when risky controls are found.
 
 ## Evidence and refinement boundary
 
@@ -151,8 +162,34 @@ Accepted resolutions are applied only to a deep-copied derived page model used
 to rebuild Markdown; the original page blocks and raw OCR evidence remain
 unchanged.
 
-The annotated PDF is generated from canonical block geometry. Semantic HTML is
-generated from refined Markdown and includes the canonical grounding context.
+The annotated PDF is generated from canonical block geometry. The standalone
+HTML artifact safely renders the refined Markdown page by page and exposes
+canonical region IDs, types, reading order, confidence, and bounding boxes in
+a grounding-details section. It does not embed or recreate the original page
+image.
+
+## Document chat flow
+
+1. A completed Parse stores a `ProcessedMarkdownDocument` in Streamlit session
+   state. This restricted model contains the document ID, display name,
+   generated Markdown, selected pages, status, and failed-page numbers only.
+2. The user selects up to 12 processed documents. Changing that scope clears
+   the prior conversation.
+3. `retrieve_markdown_excerpts` divides Markdown at page markers and headings,
+   then uses local lexical ranking for targeted questions or stratified
+   sampling for summaries and comparisons. Requests are capped at 12 excerpts
+   and 40,000 Markdown characters.
+4. `OpenAIRefiner.answer_document_question` sends the selected excerpt records,
+   document metadata, the current question, and at most six recent visible
+   messages to `gpt-5.6-luna`. Its policy and request templates are packaged
+   Markdown prompt resources.
+5. The structured response must be answered, off-topic, or insufficient
+   evidence. An answer is accepted only when it contains text and cites only
+   supplied excerpt IDs; otherwise the application fails closed to its own
+   insufficient-evidence message. Cited excerpts remain visible in the UI.
+
+Chat usage is appended to the same session usage history as extraction usage,
+but chat does not call RapidOCR or mutate the canonical Parse result.
 
 ## Public boundaries
 
@@ -171,6 +208,9 @@ generated from refined Markdown and includes the canonical grounding context.
   and refinements; `AgentWorkflowResult` holds derived decisions and audit
   events. `DocumentResult` remains a smaller compatibility result used by the
   capability pipeline and its portable export helper.
+- `ProcessedMarkdownDocument`, `MarkdownExcerpt`, and `DocumentChatAnswer`
+  define the restricted document-chat boundary. Their types prevent original
+  input bytes and OCR page objects from entering the chat request path.
 
 ## Local API
 
@@ -217,3 +257,24 @@ status.
    inspected; if CUDA is absent, engine provenance is changed to CPU.
 6. Luna context uses lossless block-evidence row serialization in both modes and rendered-evidence batching.
    See [Context engineering](CONTEXT-ENGINEERING.md) for the payload and telemetry contract.
+7. Document-chat retrieval is lexical and session-local. It bounds request
+   size, but it is not a semantic vector index and can miss relevant passages
+   when a question uses terminology absent from the source Markdown.
+
+## Directory structure
+
+```text
+app.py                         Streamlit entry point and top navigation
+streamlit_app.py               Parse page and shared session result state
+app_pages/                     Optional workflow and document-chat pages
+src/agentic_extractor/         Canonical models, pipeline, adapters, and artifacts
+src/agentic_extractor/prompts/ Versioned Luna policies and request templates
+tests/                         Focused unit and local integration tests
+docs/                          Architecture, setup, API, and operating guidance
+```
+
+UI composition stays in the entry points and `app_pages/`; reusable document
+and model behavior stays in the package. Prompt text is kept outside Python so
+policy changes are reviewable and hashed in usage telemetry. Tests mirror these
+boundaries, allowing OCR, Luna, workflows, artifacts, API behavior, and chat
+retrieval to be checked independently.

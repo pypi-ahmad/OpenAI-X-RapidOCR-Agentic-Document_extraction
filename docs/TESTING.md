@@ -36,6 +36,14 @@ Run the complete suite, including the configured coverage check:
 uv run pytest
 ```
 
+During iteration, disable the repository-wide coverage addopts and run only the
+affected modules. The final validation must still use the unmodified full-suite
+command above so the 80% coverage gate is enforced:
+
+```powershell
+uv run pytest -o addopts="" tests/test_document_chat.py tests/test_navigation.py
+```
+
 Run one test module:
 
 ```powershell
@@ -62,6 +70,31 @@ uv run pytest tests/test_local_artifacts.py tests/test_export.py
 uv run pytest tests/test_api.py tests/test_launcher.py
 ```
 
+Run the document-only chat grounding and navigation checks:
+
+```powershell
+uv run pytest tests/test_document_chat.py tests/test_navigation.py tests/test_prompt_resources.py
+```
+
+These tests prove that chat receives generated Markdown rather than original
+files, retrieves bounded document-scoped excerpts, limits recent conversation
+history, refuses unknown citations, fails closed for off-topic or insufficient
+evidence responses, serializes untrusted prompt-injection text as data, and
+clears chat history when the selected document scope changes. Prompt-resource
+tests also verify that reusable Luna instructions are packaged as versioned
+Markdown files.
+
+Run agentic workflow validation independently:
+
+```powershell
+uv run pytest tests/test_workflow.py tests/test_routing.py tests/test_schema_input.py
+```
+
+This group covers classification, hierarchical sections, document splitting,
+schema input, grounded extraction, abstention and review behavior, validation
+rules, immutable source evidence, bounded repair, and the required
+RapidOCR-then-GPT execution order.
+
 Run the CUDA provider-detection and High Accuracy block-review regressions:
 
 ```powershell
@@ -74,6 +107,16 @@ The artifact tests inspect generated Markdown, JSON, HTML, annotated PDF, ZIP,
 and manifest content. API tests use `TestClient` with fake engine boundaries;
 the launcher test verifies that `run_app.cmd` targets only confirmed TCP port
 `8841` listeners.
+
+For a manual Streamlit launch check, start the app in the foreground and verify
+that it reports the local URL without an import or configuration exception:
+
+```powershell
+uv run streamlit run app.py --server.port 8841
+```
+
+This command occupies the terminal until stopped. It verifies startup only; it
+does not replace the `AppTest` UI assertions.
 
 Checkbox coverage includes all-page visual routing, structured discovery,
 bounded crop verification, grounding and confidence gates, business-rule
@@ -111,6 +154,17 @@ boundaries. Existing examples include:
   `fastapi.testclient.TestClient` with a fake refiner.
 - `tests/test_ui_state.py`, which drives the Streamlit entry point through
   `streamlit.testing.v1.AppTest`.
+- `tests/test_document_chat.py`, which verifies Markdown-only retrieval,
+  document scope, bounded history, Luna request construction, citation
+  validation, fail-closed rendering, and prompt-injection resistance.
+- `tests/test_navigation.py`, which verifies the separate workflow pages and
+  document-chat selection behavior through Streamlit `AppTest`.
+- `tests/test_prompt_resources.py`, which checks that every reusable model
+  prompt is a versioned packaged `.md` resource and that rendering preserves
+  untrusted-data delimiters.
+- `tests/test_workflow.py`, which covers state transitions, evidence grounding,
+  schema and business-rule validation, review and abstention decisions, and
+  mandatory dual-engine ordering.
 
 For parameterized inputs, use `@pytest.mark.parametrize`, as demonstrated in
 `tests/test_ingest.py`. The project declares a `live` marker for tests that

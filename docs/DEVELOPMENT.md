@@ -4,11 +4,13 @@
 ## Local setup
 
 This project uses `uv` to manage Python 3.13 and all dependencies, including
-development tools. From an existing checkout, synchronize the full development
-environment:
+development tools. Fork the GitHub repository, clone your fork, and synchronize
+the full development environment:
 
 ```powershell
+git clone https://github.com/<your-account>/OpenAI-X-RapidOCR-Agentic-Document_extraction.git
 cd OpenAI-X-RapidOCR-Agentic-Document_extraction
+git remote add upstream https://github.com/pypi-ahmad/OpenAI-X-RapidOCR-Agentic-Document_extraction.git
 uv sync --all-groups
 ```
 
@@ -31,7 +33,7 @@ listener on that port before starting the app.
 | --- | --- |
 | `app.py` | Streamlit navigation and page configuration. |
 | `streamlit_app.py` | Parse workspace and session lifecycle. |
-| `app_pages/` | Classify, Section, Split, and Extract result pages. |
+| `app_pages/` | Classify, Section, Split, Extract, and document-chat pages. |
 | `agentic-extractor` | Installed console script that launches `app.py` through Streamlit. |
 | `agentic_extractor.api:app` | Local FastAPI application served separately with Uvicorn. |
 | `run_app.cmd` | Windows launcher for the Streamlit UI; verifies and clears only TCP listeners on port `8841`, then keeps foreground logs visible. |
@@ -90,11 +92,43 @@ is the configured Python package build backend.
   `src/agentic_extractor/costs.py`.
 - Route both UI and API work through these canonical boundaries. Raw RapidOCR
   evidence is immutable; corrections belong in the auditable refinement layer.
+- Keep document-chat contracts and local Markdown retrieval in
+  `src/agentic_extractor/document_chat.py`, the Luna request boundary in
+  `OpenAIRefiner.answer_document_question`, and page rendering in
+  `app_pages/chat.py`. Chat sources must contain generated Parse Markdown and
+  display metadata only—never original bytes, page images, OCR objects, or
+  artifact payloads.
 - Keep CUDA eligibility and fallback logic in `src/agentic_extractor/ocr.py`.
   Detection accepts either an enumerated CUDA plugin device or the conventional
   CUDA execution provider with a GPU device, then verifies the detector
   session provider after OCR initializes. Cover detection and CPU fallback
   changes in `tests/test_local_parse.py`.
+
+## Streamlit navigation and session state
+
+`app.py` owns page configuration and top navigation. Parse is the default page;
+Classify, Section, Split, Extract, and Chat are separate `st.Page` entries.
+Keep workflow controls in the Parse sidebar and result rendering on the
+corresponding page under `app_pages/`. New pages should read canonical results
+from session state instead of re-running OCR or duplicating pipeline logic.
+
+The Parse page initializes shared keys with `setdefault`. A completed or
+partially completed Parse is registered in `processed_documents` as a frozen
+`ProcessedMarkdownDocument`; the registry contains only generated Markdown,
+selected-page metadata, status, and failed-page numbers. `current_processed_document_id`
+keeps reruns of the same upload attached to one entry. `usage_history` is shared
+by Parse and document chat so both kinds of Luna calls appear in the existing
+usage panel. The application reset action clears the entire Streamlit session.
+
+Document chat is intentionally session-only. It permits up to 12 processed
+documents, defaults to the newest entry, and clears `chat_messages` whenever
+`chat_scope` changes. Local retrieval splits Markdown by page markers and
+headings, limits excerpts and context characters, and sends only those excerpts
+plus the six most recent visible messages to Luna. An answer is rendered only
+when its citation IDs match supplied excerpts; unknown or missing citations fail
+closed as insufficient evidence. Cover these boundaries in
+`tests/test_document_chat.py` and navigation/state behavior in
+`tests/test_navigation.py`.
 
 ## Code style
 
@@ -110,13 +144,14 @@ is the configured Python package build backend.
 
 ## Branch conventions
 
-No branch naming convention, default branch, or commit-message convention is
-documented in this checkout.
+The repository's current default development branch is `main`. No feature-branch
+naming or commit-message convention is documented; use a short descriptive
+branch name and keep commits focused unless maintainers request another format.
 
-## Contribution expectations
+## Pull request process
 
-No contribution guide, pull-request template, or repository-enforced review
-process is present in this checkout. For locally prepared changes:
+No pull-request template or repository-enforced review workflow is present in
+this checkout. For locally prepared changes:
 
 - Preserve unrelated work and keep changes within the responsible module.
 - Add focused regression tests under `tests/` for behavior changes.
@@ -127,5 +162,7 @@ process is present in this checkout. For locally prepared changes:
 - Document any user-visible behavior or configuration change without including
   credentials.
 
-See [Testing](TESTING.md) for focused test commands and coverage behavior, and
-[Context engineering](CONTEXT-ENGINEERING.md) before changing Luna payloads or prompt order.
+See [Contributing](../CONTRIBUTING.md) for contribution guidelines,
+[Testing](TESTING.md) for focused test commands and coverage behavior, and
+[Context engineering](CONTEXT-ENGINEERING.md) before changing Luna payloads or
+prompt order.

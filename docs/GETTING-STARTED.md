@@ -59,10 +59,10 @@ uv run streamlit run app.py --server.port 8841
 ```
 
 Open [http://127.0.0.1:8841](http://127.0.0.1:8841), upload a PDF, PNG, JPEG,
-or TIFF document, select a mode, then choose **Extract document**. The
-application accepts uploads up to 50 MiB.
+or single-frame TIFF document, select a mode, then choose **Extract document**.
+The application accepts uploads up to 50 MiB.
 
-On Windows, [`../run_app.cmd`](../run_app.cmd) is the recommended convenience
+On Windows, [`run_app.cmd`](../run_app.cmd) is the recommended convenience
 launcher. It:
 
 - checks that `uv` is available;
@@ -87,23 +87,54 @@ stopped.
    `1 <= start_page <= end_page <= total_pages`. The initial range selects the
    full document. Images are treated as one page and do not show irrelevant
    range controls.
-4. Choose **Balanced** for compact grounded context with targeted visual review,
-   or **High Accuracy** for image and full-evidence review of every selected
-   page. In High Accuracy, each RapidOCR block with recognition confidence
-   strictly below `0.85` must receive a grounded, accepted confirmation or
-   correction from the existing GPT page-refinement request. Missing, rejected,
-   or abstained outcomes make the run `REVIEW_REQUIRED`; this check does not add
-   another GPT call and is not enforced in Balanced mode. Both modes always call
-   GPT with medium reasoning effort.
-5. Optionally configure classification, splitting, or extraction fields, then
-   choose **Extract document**.
-6. Follow the progress percentage and review any warnings or failed pages. A
+4. Choose **Balanced** to send every selected page image with compact grounded
+   OCR/layout context, or **High Accuracy** to send every selected page image
+   with full relevant OCR evidence. In High Accuracy, each RapidOCR block with
+   recognition confidence strictly below `0.85` must receive a grounded,
+   accepted confirmation or correction from the existing GPT page-refinement
+   request. Missing, rejected, or abstained outcomes make the run
+   `REVIEW_REQUIRED`; this check does not add another GPT call and is not
+   enforced in Balanced mode. Both modes always call GPT with medium reasoning
+   effort.
+5. Parse is always enabled. Optionally enable **Classify**, **Section**,
+   **Split**, or **Extract**. Classify requires an allowlist; split overrides
+   require a reason; and Extract accepts guided fields, pasted or uploaded JSON
+   Schema, or pasted or uploaded Markdown field definitions.
+6. Choose **Extract document**.
+7. Follow the progress percentage and review any warnings or failed pages. A
    completed run exposes rendered and raw Markdown, grounded blocks, workflow
    results, usage, and artifact downloads.
 
-Only selected pages are sent to the extraction pipeline and included in
-artifacts. Review the source preview and page-quality diagnostics before a paid
-run when scan quality is uncertain.
+The pipeline loads the full upload to validate and inspect the document, then
+limits OCR, GPT processing, and generated artifacts to the selected pages.
+Generated downloads are named `document.md`, `parse-result.json`,
+`annotated.pdf`, `document.html`, and `agentic-extraction.zip`; the generated ZIP
+contains an artifact named `manifest.json` and any generated checkbox crops.
+Review the source preview and page-quality diagnostics before a paid run when
+scan quality is uncertain.
+
+Optional workflows consume the canonical GPT-refined Markdown and its grounding
+index; they do not run OCR again. Their results appear on the separate
+**Classify**, **Section**, **Split**, and **Extract** pages. Uncertain or
+unsupported results remain review-required or abstained instead of being marked
+verified.
+
+## Document chat
+
+After at least one Parse completes, open **Chat** from the top navigation. The
+newest processed document is selected initially; you can place up to 12
+session-processed documents in scope. Changing the selection clears the current
+chat so answers cannot silently carry context from an earlier scope.
+
+Chat sends Luna only retrieved excerpts from the selected documents' generated
+Markdown and up to six recent visible conversation messages. It never sends the
+original upload, page images, OCR objects, or raw document bytes. Answers cite
+the excerpt IDs shown under the response. Off-topic requests are redirected to
+the selected documents, and unsupported answers report insufficient evidence.
+
+Processed chat sources and messages live only in Streamlit session state. A
+browser-session reset or application restart removes them; process the document
+again to restore it to the chat selector.
 
 ## Common setup issues
 
@@ -151,7 +182,8 @@ and should not be used as the routine Streamlit alternative.
 Confirm that the content is a readable PDF, PNG, JPEG, or TIFF rather than
 trusting the filename extension. Also confirm that the decoded document is not
 empty, does not exceed 50 MiB or 200 pages, and that image dimensions remain
-within the configured pixel limit.
+within the configured 25,000,000-pixel limit. Multi-frame TIFF images are not
+accepted; convert them to PDF first.
 
 ### A run requires review
 
@@ -159,6 +191,13 @@ within the configured pixel limit.
 confidence is insufficient for automatic acceptance. Inspect field provenance,
 validation results, abstention reasons, and source overlays instead of treating
 the value as verified.
+
+### Chat is disabled or no documents are listed
+
+Complete a Parse in the current Streamlit session first and keep at least one
+processed document selected on the **Chat** page. Chat also requires
+`OPENAI_API_KEY` in the Streamlit process environment. Restarting the app or
+resetting the session clears the session-only processed-document registry.
 
 ## Next steps
 

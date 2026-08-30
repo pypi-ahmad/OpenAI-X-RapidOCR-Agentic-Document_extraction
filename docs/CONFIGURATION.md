@@ -63,13 +63,15 @@ optional and becomes `None` when not set.
 tests. It does not change application startup or extraction behavior.
 
 RapidOCR is also required at runtime, but it is installed as a Python
-dependency rather than configured through an environment variable. The OCR
-adapter prefers CUDA by default. It requests CUDA when ONNX Runtime reports a
-CUDA execution-provider device, or when `CUDAExecutionProvider` is available
-and ONNX Runtime identifies the device as a GPU. If CUDA initialization fails,
-it creates a CPU engine instead. After the first OCR call initializes the model
-sessions, the adapter inspects the detector session's active providers; if
-`CUDAExecutionProvider` is absent, it records CPU use in engine provenance.
+dependency rather than configured through an environment variable. `pyproject.toml`
+installs `onnxruntime-gpu` and pins RapidOCR to a specific upstream Git revision.
+The OCR adapter prefers CUDA by default. It requests CUDA when ONNX Runtime
+reports a CUDA execution-provider device, or when `CUDAExecutionProvider` is
+available and ONNX Runtime identifies the device as a GPU. If CUDA initialization
+fails, it creates a CPU engine instead. After the first OCR call initializes the
+model sessions, the adapter inspects the detector session's active providers; if
+`CUDAExecutionProvider` is absent, it records CPU use in engine provenance. There
+is no environment-variable switch for selecting the OCR device.
 
 ## Defaults
 
@@ -89,6 +91,45 @@ environment-variable settings. Most are defined by `Settings` in
 | `reasoning_effort` | `medium` | Declared reasoning policy value. The request boundary also uses `medium`. |
 | `cloud_batch_characters` | `80,000` | Rendered evidence-character budget for each cloud-refinement batch. Oversized single pages are isolated, not truncated. |
 | High Accuracy block review threshold | `0.85` | Fixed code policy: OCR blocks with a score strictly below `0.85` require a grounded refinement outcome in High Accuracy mode. A score equal to `0.85` is not below the threshold. This is not user-configurable. |
+
+## Usage pricing
+
+The usage dashboard and artifact manifest use the rates defined in
+`src/agentic_extractor/costs.py`. These are application policy values rather than
+environment-variable overrides.
+
+| Token category | USD per 1 million tokens |
+| --- | ---: |
+| Uncached input | `$0.20` |
+| Cached input | `$0.02` |
+| Cache-write input | `$0.25` |
+| Output | `$1.20` |
+
+For a request above `272,000` input tokens, the calculator applies a `2.0x`
+multiplier to all input categories and a `1.5x` multiplier to output. A request
+at exactly `272,000` input tokens does not receive these multipliers. If input or
+output usage is missing or inconsistent, the calculator reports the cost as
+unavailable instead of fabricating a value. When cached-input or cache-write
+breakdowns are missing but total input and output are valid, it labels the result
+as an estimate.
+
+## Configuration diagnostics
+
+The Streamlit sidebar reports configuration status without showing credential
+values:
+
+- `OpenAI API configured` means only that `OPENAI_API_KEY` exists in the current
+  process. Before processing, the app calls the model-access preflight; an absent
+  or invalid configuration blocks extraction before RapidOCR runs.
+- `RapidOCR installed` reports the installed package version without initializing
+  OCR models. Engine creation still fails with an actionable setup error if the
+  package cannot be imported.
+- OCR provenance records the active device after model initialization. A CUDA
+  warning means ONNX Runtime did not expose an active CUDA provider and RapidOCR
+  is using CPU; it does not mean OCR evidence was fabricated or skipped.
+
+Document chat requires OpenAI configuration but consumes only previously generated
+Markdown. It does not initialize RapidOCR or read the original uploaded document.
 
 ## Per-environment overrides
 

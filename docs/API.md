@@ -22,7 +22,8 @@ While the server is running:
 - Route prefix: `/api/v1`
 
 The Streamlit interface remains on port `8841`; the API is a separately started
-local process.
+local process. Document chat is currently a Streamlit-only feature; this API
+does not expose a chat endpoint.
 
 ## Authentication and rate limits
 
@@ -216,7 +217,7 @@ fields. It returns HTTP `409` only when the job has no workflow result.
 High Accuracy block-review records are not separate fields in this response.
 Their unresolved messages appear in `review_required` and corresponding
 structured `review_items`; retrieve the records themselves from job status or
-`parse-result.json`.
+the generated canonical Parse JSON artifact.
 
 `checkboxes` contains grounded GPT-visual checkbox observations with RapidOCR label evidence,
 discovery and verification states, confidence, decision status, and review reason.
@@ -233,15 +234,15 @@ Only these exact artifact names are downloadable:
 
 | Name | Media type | Contents |
 | --- | --- | --- |
-| `document.md` | `text/markdown` | Refined, grounded Markdown |
-| `parse-result.json` | `application/json` | Canonical Parse contract and audit data |
-| `annotated.pdf` | `application/pdf` | Selected pages with OCR/layout geometry |
-| `document.html` | `text/html` | Refined Markdown rendered with page and grounding context |
-| `bundle.zip` | `application/zip` | Artifacts, checkbox crops under `checkboxes/`, and `manifest.json` |
+| Generated artifact `document.md` | `text/markdown` | Refined, grounded Markdown |
+| Generated artifact `parse-result.json` | `application/json` | Canonical Parse contract and audit data |
+| Generated artifact `annotated.pdf` | `application/pdf` | Selected pages with OCR/layout geometry |
+| Generated artifact `document.html` | `text/html` | Refined Markdown rendered with page and grounding context |
+| Generated artifact `bundle.zip` | `application/zip` | Generated bundle members, checkbox crops under `checkboxes/`, and generated ZIP member `manifest.json` |
 
-The downloaded `parse-result.json` uses the same
+The downloaded generated artifact `parse-result.json` uses the same
 `document_metadata.low_confidence_block_reviews` location as the job-status
-`result`. In `bundle.zip`, `manifest.json` copies document metadata under
+`result`. In the generated `bundle.zip`, its generated ZIP member `manifest.json` copies document metadata under
 `source`, so the records are at `source.low_confidence_block_reviews`; workflow
 state and review messages are under `agent_workflow`.
 
@@ -356,6 +357,8 @@ request body or checked-in file.
 - Jobs, uploaded bytes, results, and artifacts exist only in process memory.
 - There is no persistence, authentication, authorization, rate limiting,
   streaming upload, multi-instance coordination, or tenant isolation.
+- There is no document-chat endpoint. Chat sources and conversation state are
+  held only in the active Streamlit session.
 - Base64 increases request size compared with a binary multipart upload.
 - Restart and one-hour expiry are destructive for job state.
 

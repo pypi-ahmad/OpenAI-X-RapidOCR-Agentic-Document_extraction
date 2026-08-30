@@ -6,7 +6,7 @@
 | ADE | Agentic document extraction: a bounded workflow for parsing, classifying, sectioning, splitting, extracting, validating, and reviewing documents. |
 | Abstention | An explicit decision not to claim a classification, refinement, or field value when support is insufficient; it is retained with a reason instead of being treated as verified. |
 | Artifact | A selected-page output: Markdown, Parse JSON, annotated PDF, semantic HTML, manifest, or ZIP bundle. |
-| Balanced | Dual-engine mode that sends every selected page image for checkbox coverage, compact OCR context by default, and full OCR context only for routed pages. |
+| Balanced | Dual-engine mode that sends every selected page image and full OCR context for every selected page. |
 | Block | A page-grounded unit of OCR text with type, raw confidence, and optional geometry; its position in the page's ordered block list represents reconstructed reading order. |
 | Canonical Parse result | `LocalParseResult`, the evidence-bearing input to workflow evaluation and artifact generation. |
 | Chunk ID | The stable identifier of a layout chunk that groups one or more source blocks and can ground sections or extracted fields. |
@@ -24,7 +24,7 @@
 | Review required | Terminal state indicating that processing completed but evidence, confidence, or validation needs a person. |
 | Review item | Structured audit entry naming the workflow stage, issue code, explanation, affected pages/source IDs, retryability, and attempt number. |
 | Selected pages | Inclusive, one-based source pages chosen for processing and export. |
-| Source-faithful view | A view whose layout is derived from page imagery and canonical geometry rather than Markdown formatting. |
+| Source-faithful view | The current HTML view renders refined Markdown by page and lists canonical grounding metadata; it does not position text over page imagery from geometry. |
 | Workflow event | Audit entry recording state, action, provider, reason, elapsed time, warnings, and token/cost impact. |
 
 See [Architecture](architecture.md) for the runtime flow and
