@@ -1,0 +1,34 @@
+{
+  "mode": "interactive",
+  "granularity": "coarse",
+  "workflow": {
+    "research": false,
+    "plan_check": true,
+    "verifier": true,
+    "auto_advance": false,
+    "nyquist_validation": true,
+    "security_enforcement": true,
+    "security_asvs_level": 1,
+    "security_block_on": "high",
+    "code_review_depth": "deep",
+    "test_command": "uv run pytest -x -q --tb=short",
+    "test_gate_timeout": 600
+  },
+  "planning": {
+    "commit_docs": true,
+    "search_gitignored": false,
+    "sub_repos": []
+  },
+  "parallelization": {
+    "enabled": true,
+    "plan_level": false,
+    "task_level": false,
+    "skip_checkpoints": true,
+    "max_concurrent_agents": 3,
+    "min_plans_for_parallel": 2
+  },
+  "hooks": {
+    "context_warnings": true
+  },
+  "project_code": "ADE"
+}
