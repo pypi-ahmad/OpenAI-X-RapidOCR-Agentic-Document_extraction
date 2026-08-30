@@ -1,0 +1,29 @@
+[server]
+address = "127.0.0.1"
+port = 8841
+maxUploadSize = 50
+
+[browser]
+gatherUsageStats = false
+
+[theme]
+base = "dark"
+primaryColor = "#A61E5C"
+backgroundColor = "#111318"
+secondaryBackgroundColor = "#202044"
+textColor = "#F1F3F7"
+linkColor = "#32D6E8"
+borderColor = "#34365F"
+grayColor = "#9299AA"
+blueColor = "#32D6E8"
+baseRadius = "8px"
+buttonRadius = "8px"
+showWidgetBorder = true
+showSidebarBorder = true
+
+[theme.sidebar]
+backgroundColor = "#17172F"
+secondaryBackgroundColor = "#202044"
+textColor = "#F1F3F7"
+primaryColor = "#A61E5C"
+borderColor = "#34365F"
