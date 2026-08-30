@@ -37,7 +37,8 @@ def test_versioned_prompts_are_packaged_markdown_resources() -> None:
             "4"
             if name in {"page-context-full.md", "page-context-compact.md"}
             else "3"
-            if name in {
+            if name
+            in {
                 "refinement.md",
                 "block-context-full.md",
                 "block-context-compact.md",

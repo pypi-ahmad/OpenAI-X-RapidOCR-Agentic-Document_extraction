@@ -177,8 +177,8 @@ def test_block_context_flags_only_confidence_strictly_below_85_percent() -> None
         Block(id="p1-b2", page=1, text="boundary", ocr_score=0.85), True
     )
 
-    assert ",true," in low
-    assert ",false," in boundary
+    assert json.loads(low)[-1] is True
+    assert json.loads(boundary)[-1] is False
 
 
 def test_missing_api_usage_never_becomes_a_zero_cost_claim() -> None:
@@ -275,7 +275,47 @@ def test_balanced_and_high_accuracy_use_different_context_with_all_page_images()
     )
 
 
-def test_context_rows_are_lossless_and_smaller_than_repeated_key_objects() -> None:
+@pytest.mark.parametrize("full_context", [False, True])
+def test_context_rows_are_lossless_in_both_modes(full_context: bool) -> None:
+    block = Block(
+        id="p1-b1",
+        page=1,
+        text="Invoice total $123.45",
+        type="key_value",
+        ocr_score=0.8234567,
+        bbox=[0.1234567, 0.2345678, 0.8765432, 0.3456789],
+        polygon=[[10, 20], [80, 20], [80, 30], [10, 30]],
+    )
+    page = PageParse(page=1, width=100, height=100, image_bytes=_jpeg(), blocks=[block])
+    packet = OpenAIRefiner(client=SimpleNamespace())._prompt_packet(
+        [page], {1} if full_context else set(), {"Parse"}, [], None
+    )
+    columns_match = re.search(
+        r"<OCR_BLOCK_COLUMNS>(.*?)</OCR_BLOCK_COLUMNS>", packet.text, re.DOTALL
+    )
+    rows_match = re.search(r"<OCR_BLOCKS>\s*(.*?)\s*</OCR_BLOCKS>", packet.text, re.DOTALL)
+
+    assert columns_match is not None
+    assert rows_match is not None
+    evidence = dict(
+        zip(
+            json.loads(columns_match.group(1)),
+            json.loads(rows_match.group(1)),
+            strict=True,
+        )
+    )
+    assert evidence == {
+        "id": block.id,
+        "type": block.type,
+        "text": block.text,
+        "confidence": block.ocr_score,
+        "bbox": block.bbox,
+        "polygon": block.polygon,
+        "requires_gpt_review": True,
+    }
+
+
+def test_context_row_serialization_is_smaller_than_repeated_key_object() -> None:
     block = Block(
         id="p1-b1",
         page=1,
@@ -285,18 +325,7 @@ def test_context_rows_are_lossless_and_smaller_than_repeated_key_objects() -> No
         bbox=[0.1, 0.2, 0.8, 0.3],
         polygon=[[10, 20], [80, 20], [80, 30], [10, 30]],
     )
-    rendered, _ = OpenAIRefiner._block_context(block, True)
-    row = json.loads(rendered)
-
-    assert row == [
-        block.id,
-        block.type,
-        block.text,
-        block.ocr_score,
-        block.bbox,
-        True,
-        block.polygon,
-    ]
+    rendered, _ = OpenAIRefiner._block_context(block, False)
     repeated_keys = json.dumps(
         {
             "id": block.id,
@@ -304,8 +333,8 @@ def test_context_rows_are_lossless_and_smaller_than_repeated_key_objects() -> No
             "text": block.text,
             "confidence": block.ocr_score,
             "bbox": block.bbox,
-            "requires_gpt_review": True,
             "polygon": block.polygon,
+            "requires_gpt_review": True,
         },
         separators=(",", ":"),
     )
