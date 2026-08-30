@@ -1,4 +1,4 @@
-<!-- prompt-version: 3 -->
+<!-- prompt-version: 4 -->
 
 <PAGE_CONTEXT page="$page_number" detail="full">
 <PAGE_METADATA>$page_metadata</PAGE_METADATA>

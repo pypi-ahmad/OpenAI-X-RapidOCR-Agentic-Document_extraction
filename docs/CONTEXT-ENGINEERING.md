@@ -11,9 +11,9 @@ OCR rows by default and full rows for routed uncertainty or complexity; High Acc
 rows for every selected page.
 
 Block columns are declared once per page and values are serialized as deterministic JSON rows.
-Compact rows retain block ID, type, text, confidence, normalized bounding box, and the low-confidence
-review flag. Full rows additionally retain the OCR polygon and page metadata. No row is sampled,
-truncated, or omitted.
+Both compact and full rows retain block ID, type, text, exact confidence, normalized bounding box,
+OCR polygon, and the low-confidence review flag. Full page context additionally retains page status,
+warnings, and layout signals. No evidence value is rounded, sampled, truncated, or omitted.
 
 Optional Classify, Section, Split, and Extract calls receive the canonical refined Markdown plus a
 lossless grounding table containing page, block ID, chunk ID, type, confidence, bounding box, and

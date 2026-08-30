@@ -34,15 +34,15 @@ _CAPABILITY_PROMPTS = {
     "Extract": "capability-extract.md",
 }
 
-_COMPACT_BLOCK_COLUMNS = [
+_BLOCK_EVIDENCE_COLUMNS = [
     "id",
     "type",
     "text",
     "confidence",
     "bbox",
+    "polygon",
     "requires_gpt_review",
 ]
-_FULL_BLOCK_COLUMNS = [*_COMPACT_BLOCK_COLUMNS, "polygon"]
 _GROUNDING_COLUMNS = ["page", "block_id", "chunk_id", "type", "confidence", "bbox", "text"]
 
 
@@ -842,9 +842,7 @@ class OpenAIRefiner:
                         "warnings": page.warnings,
                     }
                 ),
-                block_columns=_prompt_json(
-                    _FULL_BLOCK_COLUMNS if full_context else _COMPACT_BLOCK_COLUMNS
-                ),
+                block_columns=_prompt_json(_BLOCK_EVIDENCE_COLUMNS),
                 blocks="\n".join(blocks),
             )
             lines.append(page_context)
@@ -903,26 +901,17 @@ class OpenAIRefiner:
         requires_gpt_review = (
             block.ocr_score is not None and block.ocr_score < LOW_CONFIDENCE_THRESHOLD
         )
-        if full_context:
-            return render_prompt(
-                "block-context-full.md",
-                block_json=_prompt_json(
-                    [
-                        block.id,
-                        block.type,
-                        block.text,
-                        block.ocr_score,
-                        block.bbox,
-                        requires_gpt_review,
-                        block.polygon,
-                    ]
-                ),
-            )
-        bbox = [round(value, 4) for value in block.bbox] if block.bbox else None
-        confidence = round(block.ocr_score, 3) if block.ocr_score is not None else None
         return render_prompt(
-            "block-context-compact.md",
+            "block-context-full.md" if full_context else "block-context-compact.md",
             block_json=_prompt_json(
-                [block.id, block.type, block.text, confidence, bbox, requires_gpt_review]
+                [
+                    block.id,
+                    block.type,
+                    block.text,
+                    block.ocr_score,
+                    block.bbox,
+                    block.polygon,
+                    requires_gpt_review,
+                ]
             ),
         )

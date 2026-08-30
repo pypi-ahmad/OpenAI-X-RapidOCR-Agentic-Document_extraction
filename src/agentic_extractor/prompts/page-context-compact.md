@@ -1,4 +1,4 @@
-<!-- prompt-version: 3 -->
+<!-- prompt-version: 4 -->
 
 <PAGE_CONTEXT page="$page_number" detail="compact">
 <OCR_BLOCK_COLUMNS>$block_columns</OCR_BLOCK_COLUMNS>

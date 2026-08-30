@@ -119,7 +119,7 @@ time, warnings, and GPT token/cost impact where applicable.
 
 | Mode | RapidOCR | GPT text context | GPT images |
 |---|---|---|---|
-| Balanced | Every selected page | Compact grounded context; full context only for routed uncertainty or complexity | Every selected page for checkbox discovery |
+| Balanced | Every selected page | Lossless grounded block evidence; additional page/layout context only for routed uncertainty or complexity | Every selected page for checkbox discovery |
 | High Accuracy | Every selected page | Full relevant evidence; every OCR block below `0.85` is flagged as requiring a GPT outcome | Every selected page |
 
 Both modes invoke `gpt-5.6-luna` with medium reasoning effort. The difference is
@@ -215,5 +215,5 @@ status.
    one, then falls back to the conventional `CUDAExecutionProvider` plus GPU
    device check. After the first OCR call, the detector session provider list is
    inspected; if CUDA is absent, engine provenance is changed to CPU.
-6. Luna context uses lossless row serialization and rendered-evidence batching.
+6. Luna context uses lossless block-evidence row serialization in both modes and rendered-evidence batching.
    See [Context engineering](CONTEXT-ENGINEERING.md) for the payload and telemetry contract.

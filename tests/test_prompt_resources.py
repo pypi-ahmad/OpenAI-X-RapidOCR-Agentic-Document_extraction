@@ -34,12 +34,11 @@ def test_versioned_prompts_are_packaged_markdown_resources() -> None:
     for name in expected:
         prompt = load_prompt(name)
         expected_version = (
-            "3"
-            if name
-            in {
+            "4"
+            if name in {"page-context-full.md", "page-context-compact.md"}
+            else "3"
+            if name in {
                 "refinement.md",
-                "page-context-full.md",
-                "page-context-compact.md",
                 "block-context-full.md",
                 "block-context-compact.md",
                 "capability-parse.md",
