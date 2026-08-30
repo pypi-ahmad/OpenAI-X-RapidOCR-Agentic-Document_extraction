@@ -22,6 +22,12 @@ from agentic_extractor.costs import (
     calculate_usage_cost,
     usage_and_cost_dict,
 )
+from agentic_extractor.document_chat import (
+    ChatTurn,
+    DocumentChatAnswer,
+    MarkdownExcerpt,
+    ProcessedMarkdownDocument,
+)
 from agentic_extractor.models import UsageRecord
 from agentic_extractor.parse import LOW_CONFIDENCE_THRESHOLD, PageParse, build_layout_chunks
 from agentic_extractor.prompt_resources import PromptResource, load_prompt, render_prompt
@@ -243,6 +249,76 @@ class OpenAIRefiner:
                 "OPENAI_API_KEY and, only when required, OPENAI_BASE_URL, then retry."
             ) from exc
         self._configuration_validated = True
+
+    def answer_document_question(
+        self,
+        question: str,
+        documents: list[ProcessedMarkdownDocument],
+        excerpts: list[MarkdownExcerpt],
+        history: list[ChatTurn],
+    ) -> tuple[DocumentChatAnswer, UsageRecord]:
+        """Answer from generated Markdown excerpts without accepting source-file objects."""
+        prompt, prompt_resource = render_prompt(
+            "document-chat-request.md",
+            document_scope=_prompt_json(
+                [
+                    {
+                        "document_id": document.document_id,
+                        "display_name": document.display_name,
+                        "selected_pages": document.selected_pages,
+                        "processing_status": document.processing_status,
+                        "failed_pages": document.failed_pages,
+                    }
+                    for document in documents
+                ]
+            ),
+            source_excerpts=_prompt_json([excerpt.model_dump(mode="json") for excerpt in excerpts]),
+            conversation_history=_prompt_json([turn.model_dump(mode="json") for turn in history]),
+            user_question=_prompt_json(question),
+        )
+        started = time.perf_counter()
+        response = self._request(
+            [{"type": "input_text", "text": prompt}],
+            DocumentChatAnswer,
+            policy_name="document-chat-system.md",
+        )
+        elapsed = time.perf_counter() - started
+        parsed = response.output_parsed
+        if parsed is None:
+            raise RuntimeError("OpenAI returned no structured document-chat response.")
+        supplied = {excerpt.excerpt_id for excerpt in excerpts}
+        cited = set(parsed.citation_ids)
+        if not cited <= supplied or (
+            parsed.disposition == "answered"
+            and (not parsed.answer_markdown.strip() or not parsed.citation_ids)
+        ):
+            parsed = DocumentChatAnswer(disposition="insufficient_evidence")
+        elif parsed.disposition != "answered":
+            parsed.answer_markdown = ""
+            parsed.citation_ids = []
+        usage = self._read_usage(
+            response,
+            [],
+            set(),
+            elapsed,
+            [prompt_resource],
+            purpose="document_chat",
+            context={
+                "kind": "document_chat",
+                "prompt_characters": len(prompt),
+                "evidence_characters": sum(len(excerpt.markdown) for excerpt in excerpts),
+                "source_text_characters": sum(len(excerpt.markdown) for excerpt in excerpts),
+                "available_markdown_characters": sum(
+                    len(document.markdown) for document in documents
+                ),
+                "block_count": len(excerpts),
+                "document_ids": [document.document_id for document in documents],
+                "compact_pages": [],
+                "full_context_pages": [],
+            },
+            policy_name="document-chat-system.md",
+        )
+        return parsed, usage
 
     def refine(
         self,
@@ -701,9 +777,13 @@ class OpenAIRefiner:
         return output.getvalue()
 
     def _request(
-        self, content: list[dict[str, Any]], text_format: type[BaseModel] = CloudResult
+        self,
+        content: list[dict[str, Any]],
+        text_format: type[BaseModel] = CloudResult,
+        *,
+        policy_name: Literal["policy.md", "document-chat-system.md"] = "policy.md",
     ) -> Any:
-        policy = load_prompt("policy.md")
+        policy = load_prompt(policy_name)
         return self.client.responses.parse(
             model=MODEL_NAME,
             reasoning={"effort": REASONING_EFFORT},
@@ -724,6 +804,7 @@ class OpenAIRefiner:
         purpose: str = "refinement",
         checkbox_ids: list[str] | None = None,
         context: dict[str, Any] | None = None,
+        policy_name: Literal["policy.md", "document-chat-system.md"] = "policy.md",
     ) -> UsageRecord:
         usage = getattr(response, "usage", None)
         input_tokens = getattr(usage, "input_tokens", None)
@@ -748,7 +829,7 @@ class OpenAIRefiner:
         call["reasoning_effort"] = REASONING_EFFORT
         call["elapsed_seconds"] = elapsed
         call["purpose"] = purpose
-        resources = [load_prompt("policy.md"), *(prompt_resources or [])]
+        resources = [load_prompt(policy_name), *(prompt_resources or [])]
         call["prompts"] = [
             {"name": item.name, "version": item.version, "sha256": item.sha256}
             for item in dict.fromkeys(resources)
@@ -758,19 +839,25 @@ class OpenAIRefiner:
             call["context"] = context
         page_count = len(page_numbers)
         call["per_page_usage_estimate"] = {
-            "input_tokens": input_tokens / page_count if input_tokens is not None else None,
+            "input_tokens": (
+                input_tokens / page_count if input_tokens is not None and page_count else None
+            ),
             "cached_input_tokens": (
                 token_usage.cached_input_tokens / page_count
-                if token_usage.cached_input_tokens is not None
+                if token_usage.cached_input_tokens is not None and page_count
                 else None
             ),
             "cache_write_input_tokens": (
                 token_usage.cache_write_input_tokens / page_count
-                if token_usage.cache_write_input_tokens is not None
+                if token_usage.cache_write_input_tokens is not None and page_count
                 else None
             ),
-            "output_tokens": output_tokens / page_count if output_tokens is not None else None,
-            "total_tokens": total_tokens / page_count if total_tokens is not None else None,
+            "output_tokens": (
+                output_tokens / page_count if output_tokens is not None and page_count else None
+            ),
+            "total_tokens": (
+                total_tokens / page_count if total_tokens is not None and page_count else None
+            ),
         }
         call["per_page_usage_basis"] = "equal allocation across pages in this API call"
         call["per_page_cost_usd_estimate"] = (

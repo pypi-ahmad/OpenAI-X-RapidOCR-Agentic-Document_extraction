@@ -27,6 +27,8 @@ def test_versioned_prompts_are_packaged_markdown_resources() -> None:
         "capability-split.md",
         "capability-extract.md",
         "markdown-workflow.md",
+        "document-chat-system.md",
+        "document-chat-request.md",
     }
     packaged = {item.name for item in files("agentic_extractor.prompts").iterdir()}
 
@@ -34,7 +36,9 @@ def test_versioned_prompts_are_packaged_markdown_resources() -> None:
     for name in expected:
         prompt = load_prompt(name)
         expected_version = (
-            "4"
+            "1"
+            if name in {"document-chat-system.md", "document-chat-request.md"}
+            else "4"
             if name in {"page-context-full.md", "page-context-compact.md"}
             else "3"
             if name
