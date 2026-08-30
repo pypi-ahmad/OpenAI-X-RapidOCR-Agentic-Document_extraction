@@ -6,7 +6,7 @@
 | ADE | Agentic document extraction: a bounded workflow for parsing, classifying, sectioning, splitting, extracting, validating, and reviewing documents. |
 | Abstention | An explicit decision not to claim a classification, refinement, or field value when support is insufficient; it is retained with a reason instead of being treated as verified. |
 | Artifact | A selected-page output: Markdown, Parse JSON, annotated PDF, semantic HTML, manifest, or ZIP bundle. |
-| Balanced | Dual-engine mode that sends every selected page image and full OCR context for every selected page. |
+| Balanced | Dual-engine mode that sends every selected page image while limiting full OCR/layout context to pages selected by routing heuristics. |
 | Block | A page-grounded unit of OCR text with type, raw confidence, and optional geometry; its position in the page's ordered block list represents reconstructed reading order. |
 | Canonical Parse result | `LocalParseResult`, the evidence-bearing input to workflow evaluation and artifact generation. |
 | Chunk ID | The stable identifier of a layout chunk that groups one or more source blocks and can ground sections or extracted fields. |

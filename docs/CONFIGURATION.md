@@ -16,7 +16,7 @@ value.
 
 | Variable | Required | Default | Description |
 | --- | --- | --- | --- |
-| `OPENAI_API_KEY` | Required for extraction | None | OpenAI credential used to create the client and validate access to the configured model. Extraction stops before OCR if it is absent or unusable. |
+| `OPENAI_API_KEY` | Required for extraction and document chat | None | OpenAI credential used to create the client and validate access to the configured model. Extraction stops before OCR if it is absent or unusable; document chat is disabled when it is absent. |
 | `OPENAI_BASE_URL` | Optional | Unset (`None`) | Overrides the base URL passed to the OpenAI client. Leave it unset to use the client's standard endpoint. Any custom endpoint must support the configured model and request contract. <!-- VERIFY: Confirm compatibility of any external custom endpoint before use. --> |
 | `RUN_LIVE_PROMPT_EVAL` | Optional; tests only | Unset | Set to `1` to enable the live prompt evaluation tests in `tests/test_prompt_quality_live.py`. Other values leave those tests skipped. |
 
@@ -53,10 +53,12 @@ base = "dark"
 
 ## Required vs optional settings
 
-`OPENAI_API_KEY` is required to perform an extraction. When processing is
-requested, the Streamlit and API paths construct an OpenAI client and validate
-access to the configured model before RapidOCR runs. A missing or invalid key
-blocks processing with an actionable configuration error. `OPENAI_BASE_URL` is
+`OPENAI_API_KEY` is required to perform an extraction or use document chat.
+When extraction is requested, the Streamlit and API paths construct an OpenAI
+client and validate access to the configured model before RapidOCR runs. A
+missing or invalid key blocks processing with an actionable configuration error.
+Document chat uses the same client configuration but reads only processed
+Markdown registered in the current Streamlit session. `OPENAI_BASE_URL` is
 optional and becomes `None` when not set.
 
 `RUN_LIVE_PROMPT_EVAL` is optional and affects only the live prompt evaluation
@@ -90,6 +92,8 @@ environment-variable settings. Most are defined by `Settings` in
 | `model` | `gpt-5.6-luna` | Declared model policy value. The request boundary also uses `gpt-5.6-luna`. |
 | `reasoning_effort` | `medium` | Declared reasoning policy value. The request boundary also uses `medium`. |
 | `cloud_batch_characters` | `80,000` | Rendered evidence-character budget for each cloud-refinement batch. Oversized single pages are isolated, not truncated. |
+| OpenAI request retries | `2` | Maximum automatic retries configured on the shared OpenAI client. |
+| OpenAI request timeout | `120` seconds | Timeout configured on the shared OpenAI client. |
 | High Accuracy block review threshold | `0.85` | Fixed code policy: OCR blocks with a score strictly below `0.85` require a grounded refinement outcome in High Accuracy mode. A score equal to `0.85` is not below the threshold. This is not user-configurable. |
 
 ## Usage pricing

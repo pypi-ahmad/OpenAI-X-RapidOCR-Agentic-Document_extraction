@@ -46,6 +46,9 @@ other secrets in source files, tests, logs, fixtures, screenshots, or commits.
   not change application behavior, tools, routing, or prompt policy.
 - Route UI and local API behavior through the canonical pipeline instead of
   duplicating extraction logic.
+- Keep document chat limited to generated Parse Markdown. Chat sources must
+  never contain original uploads, page images, raw OCR objects, or artifact
+  payloads; unsupported answers and invalid citations must fail closed.
 
 ## Pull request guidelines
 
@@ -66,6 +69,9 @@ short descriptive branch name and focused commits.
 
 - For Streamlit changes, also verify the app locally with
   `uv run streamlit run app.py --server.port 8841`.
+- For document-chat changes, run `tests/test_document_chat.py`,
+  `tests/test_navigation.py`, and `tests/test_prompt_resources.py`; preserve
+  the Markdown-only source boundary and citation validation.
 - Document configuration or user-facing changes without including secret
   values, original private documents, or paid API output.
 - State what was tested and disclose any remaining limitation in the pull

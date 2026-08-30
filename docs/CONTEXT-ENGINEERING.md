@@ -1,8 +1,10 @@
 <!-- generated-by: gsd-doc-writer -->
 # Context engineering
 
-The application optimizes context without removing evidence. Accuracy and auditability take
-priority over token reduction.
+The application preserves canonical evidence while bounding the context sent to models. Parse
+reconciliation may sample or truncate model-facing block context, and document chat retrieves
+only relevant generated-Markdown excerpts; neither operation mutates the stored canonical OCR
+evidence. Accuracy and auditability take priority over token reduction.
 
 ## Runtime context contract
 
@@ -14,7 +16,8 @@ rows for every selected page.
 Block columns are declared once per page and values are serialized as deterministic JSON rows.
 Both compact and full rows retain block ID, type, text, exact confidence, normalized bounding box,
 OCR polygon, and the low-confidence review flag. Full page context additionally retains page status,
-warnings, and layout signals. No evidence value is rounded, sampled, truncated, or omitted.
+warnings, and layout signals. Values within each serialized block row are not rounded or rewritten;
+later bounded calls may select fewer blocks or truncate copied text without changing canonical evidence.
 
 Optional Classify, Section, Split, and Extract calls receive the canonical refined Markdown plus a
 lossless grounding table containing page, block ID, chunk ID, type, confidence, bounding box, and
@@ -39,18 +42,21 @@ Every usage call may include a `context` object:
 
 | Field | Meaning |
 | --- | --- |
-| `kind` | Parse, grounded Markdown, repair, reconciliation, or checkbox verification context |
+| `kind` | Parse, grounded Markdown, repair, reconciliation, checkbox verification, or document-chat context |
 | `prompt_characters` | Complete rendered text prompt length |
 | `evidence_characters` | Dynamic evidence length used for batching and diagnostics |
-| `source_text_characters` | Sum of source OCR text characters represented by the call |
-| `block_count` | Evidence block or checkbox-candidate count |
+| `source_text_characters` | Sum of source OCR text characters represented by Parse/workflow calls; for document chat, retrieved generated-Markdown excerpt characters |
+| `block_count` | Evidence block or checkbox-candidate count; for document chat, retrieved excerpt count |
 | `compact_pages` | Pages represented with compact OCR rows |
 | `full_context_pages` | Pages represented with full OCR/layout rows |
 
-The export manifest exposes all of these measurements. The Usage & Cost panel exposes context kind,
-prompt and evidence characters, block count, compact pages, and full-context pages alongside
-provider-reported tokens and costs; `source_text_characters` remains manifest-only. Character counts
-are exact diagnostics but are never presented as token or price estimates.
+The export manifest records usage calls completed before artifact generation. Document-chat calls
+happen afterward, remain in session usage history, and are not retroactively added to an existing
+artifact manifest. The Parse Usage & Cost panel exposes context kind, prompt and evidence
+characters, block count, compact pages, and full-context pages alongside provider-reported tokens
+and costs; `source_text_characters` remains manifest-only. The chat page instead shows summary call,
+total-token, and total-cost metrics. Character counts are exact diagnostics but are never presented
+as token or price estimates.
 
 ## Maintenance rules
 

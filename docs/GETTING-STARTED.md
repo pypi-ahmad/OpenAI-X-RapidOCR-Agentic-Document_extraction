@@ -107,9 +107,9 @@ stopped.
 
 The pipeline loads the full upload to validate and inspect the document, then
 limits OCR, GPT processing, and generated artifacts to the selected pages.
-Generated downloads are named `document.md`, `parse-result.json`,
-`annotated.pdf`, `document.html`, and `agentic-extraction.zip`; the generated ZIP
-contains an artifact named `manifest.json` and any generated checkbox crops.
+Generated downloads include Markdown, canonical Parse JSON, an annotated PDF,
+a source-faithful HTML layout view, and a ZIP bundle. The ZIP includes an export
+manifest and any generated checkbox crops.
 Review the source preview and page-quality diagnostics before a paid run when
 scan quality is uncertain.
 

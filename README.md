@@ -150,16 +150,18 @@ Document text is treated as untrusted data. It cannot change application policy,
 ## Document chat
 
 The **Chat** page answers questions, summarizes, explains, compares, and locates information using
-only generated Parse Markdown from documents processed during the current browser session. The
-chat request never receives uploaded files, page images, OCR objects, artifact bytes, or external
-knowledge. The page displays the active document scope and cited Markdown excerpts beneath each
-grounded answer.
+only generated Parse Markdown from documents processed during the current browser session. Up to
+12 processed documents can be selected at once. The chat request never receives uploaded files,
+page images, OCR objects, artifact bytes, or external knowledge. The page displays the active
+document scope and cited Markdown excerpts beneath each grounded answer.
 
-For short scopes, all generated Markdown is available to Luna. Longer scopes use local
-page-and-heading-aware retrieval with a bounded context budget. Changing the selected documents
-starts a new conversation so facts cannot leak between scopes. Off-topic requests are redirected,
-unsupported questions receive an explicit insufficient-evidence response, and instructions found
-inside document text or user messages cannot change the document-only policy.
+Scopes up to 40,000 Markdown characters are supplied in full. Longer scopes use local,
+page-and-heading-aware lexical retrieval capped at 12 excerpts, while broad summary and comparison
+requests use samples distributed across the selected documents. Luna receives at most the six most
+recent visible chat messages. Changing the selected documents starts a new conversation so facts
+cannot leak between scopes. Off-topic requests are redirected, unsupported questions receive an
+explicit insufficient-evidence response, and instructions found inside document text or user
+messages cannot change the document-only policy.
 
 Processed chat sources and conversation history are held only in Streamlit session state. They are
 lost when the browser session or server ends, and **Reset** clears them immediately.

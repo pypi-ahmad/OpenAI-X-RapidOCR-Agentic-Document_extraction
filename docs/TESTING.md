@@ -62,6 +62,17 @@ Run the mocked dual-engine API flow, including its audited ZIP manifest:
 uv run pytest tests/test_api.py::test_mocked_dual_engine_api_flow_exports_audited_bundle
 ```
 
+Run the complete mandatory dual-engine and pricing regression set:
+
+```powershell
+uv run pytest -o addopts="" tests/test_pipeline.py tests/test_hybrid_pipeline.py tests/test_openai_refiner.py tests/test_costs.py
+```
+
+This set verifies the RapidOCR-first/Luna-second contract, fixed
+`gpt-5.6-luna` model and `medium` reasoning effort, mode-specific context,
+missing-engine failures, reported-token accounting, cached-input and cache-write
+pricing, and the long-context pricing multiplier.
+
 Run focused application-boundary checks:
 
 ```powershell

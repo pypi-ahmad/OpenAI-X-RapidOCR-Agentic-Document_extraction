@@ -39,18 +39,21 @@ sequenceDiagram
     participant API as Local FastAPI
     participant Parse as Canonical Parse
     participant Extract as Schema extraction
-    Client->>API: POST /jobs/parse
+    Client->>API: POST /api/v1/jobs/parse
     API->>Parse: RapidOCR then GPT refinement
     Parse-->>API: Parse result and artifacts
     API-->>Client: Job ID and terminal state
-    Client->>API: POST /jobs/{id}/extract
+    Client->>API: POST /api/v1/jobs/{job_id}/extract
     API->>Extract: Reuse existing Parse result
     Extract-->>API: Fields, review items, artifacts
     API-->>Client: Updated job status
 ```
 
 The sequence shows that schema extraction reuses the canonical Parse result and
-does not rerun RapidOCR.
+does not rerun RapidOCR. Classify, Section, Split, and Extract operate on the
+GPT-refined Markdown and its grounding index. Their Luna requests are text-only:
+the API does not resend the original upload or page images for these downstream
+workflows.
 
 Requests execute synchronously inside the HTTP handler. Although a submitted
 job is initially represented as `PROCESSING`, the `POST` response is returned
@@ -230,19 +233,20 @@ best-effort; unresolved controls remain `REVIEW_REQUIRED`.
 contains `name`, byte length, SHA-256 digest, and an opaque job-scoped download
 URL.
 
-Only these exact artifact names are downloadable:
+The artifact-list response supplies the exact runtime name and download URL for
+each downloadable artifact:
 
-| Name | Media type | Contents |
+| Artifact | Media type | Contents |
 | --- | --- | --- |
-| Generated artifact `document.md` | `text/markdown` | Refined, grounded Markdown |
-| Generated artifact `parse-result.json` | `application/json` | Canonical Parse contract and audit data |
-| Generated artifact `annotated.pdf` | `application/pdf` | Selected pages with OCR/layout geometry |
-| Generated artifact `document.html` | `text/html` | Refined Markdown rendered with page and grounding context |
-| Generated artifact `bundle.zip` | `application/zip` | Generated bundle members, checkbox crops under `checkboxes/`, and generated ZIP member `manifest.json` |
+| Grounded Markdown | `text/markdown` | Refined, grounded Markdown |
+| Parse result | `application/json` | Canonical Parse contract and audit data |
+| Annotated document | `application/pdf` | Selected pages with OCR/layout geometry |
+| HTML layout | `text/html` | Refined Markdown rendered with page and grounding context |
+| ZIP bundle | `application/zip` | All generated artifacts, checkbox crops, and the export manifest |
 
-The downloaded generated artifact `parse-result.json` uses the same
+The downloaded Parse-result artifact uses the same
 `document_metadata.low_confidence_block_reviews` location as the job-status
-`result`. In the generated `bundle.zip`, its generated ZIP member `manifest.json` copies document metadata under
+`result`. In the ZIP bundle, the export manifest copies document metadata under
 `source`, so the records are at `source.low_confidence_block_reviews`; workflow
 state and review messages are under `agent_workflow`.
 

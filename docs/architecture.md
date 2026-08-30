@@ -191,7 +191,7 @@ image.
 Chat usage is appended to the same session usage history as extraction usage,
 but chat does not call RapidOCR or mutate the canonical Parse result.
 
-## Public boundaries
+## Key abstractions and public boundaries
 
 - `run_agent_workflow` is the canonical full-document entry point. It validates
   OpenAI access, initializes RapidOCR, parses selected pages, performs required
@@ -216,8 +216,8 @@ but chat does not call RapidOCR or mutate the canonical Parse result.
 
 The API exposes `/api/v1` endpoints for submission, status, extraction,
 structured results, artifact metadata, and allowlisted downloads. Request and
-response bodies are Pydantic models and OpenAPI is available at `/docs` and
-`/openapi.json`.
+response bodies are Pydantic models. FastAPI serves interactive API documentation
+and its generated OpenAPI schema through local HTTP routes.
 
 Jobs execute synchronously and remain in a closure-local dictionary until
 their TTL expires. Job IDs are random URL-safe values. Documents are returned
@@ -261,7 +261,7 @@ status.
    size, but it is not a semantic vector index and can miss relevant passages
    when a question uses terminology absent from the source Markdown.
 
-## Directory structure
+## Directory structure rationale
 
 ```text
 app.py                         Streamlit entry point and top navigation

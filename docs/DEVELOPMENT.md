@@ -126,7 +126,9 @@ documents, defaults to the newest entry, and clears `chat_messages` whenever
 headings, limits excerpts and context characters, and sends only those excerpts
 plus the six most recent visible messages to Luna. An answer is rendered only
 when its citation IDs match supplied excerpts; unknown or missing citations fail
-closed as insufficient evidence. Cover these boundaries in
+closed as insufficient evidence. The retrieval limits are deterministic character
+budgets, not token estimates; provider-reported token usage remains the source for
+cost telemetry. Cover these boundaries in
 `tests/test_document_chat.py` and navigation/state behavior in
 `tests/test_navigation.py`.
 
