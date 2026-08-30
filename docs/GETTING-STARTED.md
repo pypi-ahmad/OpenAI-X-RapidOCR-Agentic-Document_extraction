@@ -168,5 +168,7 @@ the value as verified.
   boundary.
 - Review [configuration](CONFIGURATION.md) for application settings.
 - Use the [local API guide](API.md) for typed programmatic access on port `8842`.
+- See the [development guide](DEVELOPMENT.md) for local workflow, commands, and
+  contribution conventions.
 - Follow the [testing guide](TESTING.md) before changing the implementation. The
   default tests use mocked OpenAI responses and do not make paid API calls.

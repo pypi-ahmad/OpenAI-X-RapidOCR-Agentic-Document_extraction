@@ -18,6 +18,7 @@ value.
 | --- | --- | --- | --- |
 | `OPENAI_API_KEY` | Required for extraction | None | OpenAI credential used to create the client and validate access to the configured model. Extraction stops before OCR if it is absent or unusable. |
 | `OPENAI_BASE_URL` | Optional | Unset (`None`) | Overrides the base URL passed to the OpenAI client. Leave it unset to use the client's standard endpoint. Any custom endpoint must support the configured model and request contract. <!-- VERIFY: Confirm compatibility of any external custom endpoint before use. --> |
+| `RUN_LIVE_PROMPT_EVAL` | Optional; tests only | Unset | Set to `1` to enable the live prompt evaluation tests in `tests/test_prompt_quality_live.py`. Other values leave those tests skipped. |
 
 For example, in PowerShell:
 
@@ -57,6 +58,9 @@ requested, the Streamlit and API paths construct an OpenAI client and validate
 access to the configured model before RapidOCR runs. A missing or invalid key
 blocks processing with an actionable configuration error. `OPENAI_BASE_URL` is
 optional and becomes `None` when not set.
+
+`RUN_LIVE_PROMPT_EVAL` is optional and affects only the live prompt evaluation
+tests. It does not change application startup or extraction behavior.
 
 RapidOCR is also required at runtime, but it is installed as a Python
 dependency rather than configured through an environment variable. The OCR

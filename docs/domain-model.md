@@ -9,7 +9,9 @@ erDiagram
     SOURCE_PAGE ||--o{ OCR_BLOCK : contains
     SOURCE_PAGE ||--o{ PARSE_CHUNK : groups
     PARSE_CHUNK }o--o{ OCR_BLOCK : references
-    OCR_BLOCK ||--o{ EVIDENCE_REF : supports
+    SOURCE_PAGE ||--o{ EVIDENCE_REF : grounds
+    OCR_BLOCK |o--o{ EVIDENCE_REF : may_support
+    PARSE_CHUNK |o--o{ EVIDENCE_REF : may_support
     DOCUMENT_REQUEST ||--|| LOCAL_PARSE_RESULT : produces
     LOCAL_PARSE_RESULT ||--|| AGENT_WORKFLOW_RESULT : adjudicated_as
     AGENT_WORKFLOW_RESULT ||--o{ WORKFLOW_EVENT : records
@@ -52,7 +54,8 @@ as calibrated across engines.
 
 ### Evidence reference
 
-An evidence reference links a proposal to a source page and one of:
+An evidence reference links a proposal to a source page and may include one or
+more of:
 
 - an existing RapidOCR block, optionally with a quote contained in that block;
 - an existing Parse chunk whose source blocks remain traceable; or
@@ -150,8 +153,12 @@ The deterministic workflow currently supports:
 
 - `equals` for an exact expected value;
 - `sum_equals` for totals and line-item paths, with a configurable tolerance;
-  and
-- `less_than_or_equal` for ordered numeric constraints.
+- `less_than_or_equal` for ordered numeric constraints;
+- `checkbox_exactly_one`, `checkbox_min_selected`, and
+  `checkbox_max_selected` for selected-control counts;
+- `checkbox_mutually_exclusive` for incompatible selections; and
+- `checkbox_none_exclusive` to prevent a none option from coexisting with
+  another selected choice.
 
 Unsupported rule operations produce review errors rather than being ignored.
 
