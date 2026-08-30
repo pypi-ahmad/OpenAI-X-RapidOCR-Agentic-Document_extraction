@@ -1,6 +1,7 @@
 [project]
 name = "agentic-document-extractor"
 version = "0.1.0"
+license = "MIT"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.141.1",

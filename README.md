@@ -324,4 +324,4 @@ See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for commands and code style, an
 
 ## License
 
-No license file or package license declaration is currently present. Unless a license is added, no permission to copy, modify, or redistribute the project is granted by the repository.
+Licensed under the [MIT License](LICENSE).
