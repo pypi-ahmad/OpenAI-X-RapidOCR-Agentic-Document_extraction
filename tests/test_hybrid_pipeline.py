@@ -1,3 +1,5 @@
+from typing import cast
+
 from agentic_extractor.models import Block, Capability, DocumentRequest, ProcessingMode, UsageRecord
 from agentic_extractor.ocr import EngineProvenance, LocalParseResult
 from agentic_extractor.openai_refiner import CloudEvidence, CloudRefinement, CloudResult
@@ -200,7 +202,10 @@ def test_high_accuracy_grounded_correction_resolves_low_confidence_block() -> No
         result, extraction_request, CloudResult.model_validate(result.cloud_output)
     )
 
-    assert result.document_metadata["low_confidence_block_reviews"][0]["status"] == "accepted"
+    block_reviews = cast(
+        list[dict[str, object]], result.document_metadata["low_confidence_block_reviews"]
+    )
+    assert block_reviews[0]["status"] == "accepted"
     assert workflow.current_state is WorkflowState.ACCEPTED
 
 
@@ -230,7 +235,10 @@ def test_high_accuracy_abstention_preserves_block_and_requires_review() -> None:
     )
 
     assert result.pages[0].blocks[0].text == "T0tal"
-    assert result.document_metadata["low_confidence_block_reviews"][0]["status"] == "abstained"
+    block_reviews = cast(
+        list[dict[str, object]], result.document_metadata["low_confidence_block_reviews"]
+    )
+    assert block_reviews[0]["status"] == "abstained"
     assert workflow.current_state is WorkflowState.REVIEW_REQUIRED
 
 
