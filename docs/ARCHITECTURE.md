@@ -94,16 +94,16 @@ flowchart TD
 
 ### Execution sequence
 
-1. **Preflight configuration check**: `workflow.py` validates that `OPENAI_API_KEY` is present and functional via `openai_refiner.py`. If configuration is invalid, execution halts before local inference begins.
-2. **Ingestion and validation**: `ingest.py` inspects file signatures, enforces the 50 MiB, 200-page, and 25-megapixel limits, and renders selected pages to RGB images.
-3. **Local OCR**: `ocr.py` runs RapidOCR over each selected page. CPU mode distributes pages across bounded worker processes (capped by `ADE_OCR_MAX_WORKERS`); GPU mode executes serially. Raw text, recognition confidence scores, and bounding polygons are retained as immutable `Block` structures.
-4. **Layout and reading order detection**: `layout.py` communicates with the isolated `tools/pp_doclayout` worker process via standard I/O JSON IPC. The worker runs PP-DocLayoutV3 to classify document regions and determine reading order.
-5. **Table analysis**: `layout.py` crops detected table regions and invokes table classification (wired vs. wireless) and SLAN structure models in the worker. `table_structure.py` maps predicted table cells to RapidOCR blocks and produces sanitized HTML table representations.
-6. **Visual routing and checkbox analysis**: `checkbox_vision.py` detects square checkboxes and pixel states using OpenCV. `visual_routing.py` identifies high-uncertainty regions (low OCR scores, complex tables, candidate checkboxes) to be passed as high-detail image crops to OpenAI.
-7. **Semantic refinement**: `openai_refiner.py` sends grounded text context and routed image crops to `gpt-5.6-luna`. Luna verifies OCR text, corrects OCR misrecognitions, and confirms checkbox states.
-8. **Downstream workflows**: If requested, Classify, Section, Split, and Extract workflows execute using the refined Markdown and grounding index without re-running OCR.
-9. **Deterministic validation and adjudication**: `capabilities.py` and `workflow.py` validate field types, regex patterns, date formats, and business rules, transitioning the job to `ACCEPTED`, `REVIEW_REQUIRED`, or `FAILED`.
-10. **Artifact creation**: Core artifacts (Markdown, `parse-result.json`, `manifest.json`) are finalized immediately. Heavy visual artifacts (`annotated.pdf`, `document.html`, `bundle.zip`) are generated lazily upon download or view.
+1. Preflight configuration check: `workflow.py` validates that `OPENAI_API_KEY` is present and functional via `openai_refiner.py`. If configuration is invalid, execution halts before local inference begins.
+2. Ingestion and validation: `ingest.py` inspects file signatures, enforces the 50 MiB, 200-page, and 25-megapixel limits, and renders selected pages to RGB images.
+3. Local OCR: `ocr.py` runs RapidOCR over each selected page. CPU mode distributes pages across bounded worker processes (capped by `ADE_OCR_MAX_WORKERS`); GPU mode executes serially. Raw text, recognition confidence scores, and bounding polygons are retained as immutable `Block` structures.
+4. Layout and reading order detection: `layout.py` communicates with the isolated `tools/pp_doclayout` worker process via standard I/O JSON IPC. The worker runs PP-DocLayoutV3 to classify document regions and determine reading order.
+5. Table analysis: `layout.py` crops detected table regions and invokes table classification (wired vs. wireless) and SLAN structure models in the worker. `table_structure.py` maps predicted table cells to RapidOCR blocks and produces sanitized HTML table representations.
+6. Visual routing and checkbox analysis: `checkbox_vision.py` detects square checkboxes and pixel states using OpenCV. `visual_routing.py` identifies high-uncertainty regions (low OCR scores, complex tables, candidate checkboxes) to be passed as high-detail image crops to OpenAI.
+7. Semantic refinement: `openai_refiner.py` sends grounded text context and routed image crops to `gpt-5.6-luna`. Luna verifies OCR text, corrects OCR misrecognitions, and confirms checkbox states.
+8. Downstream workflows: If requested, Classify, Section, Split, and Extract workflows execute using the refined Markdown and grounding index without re-running OCR.
+9. Deterministic validation and adjudication: `capabilities.py` and `workflow.py` validate field types, regex patterns, date formats, and business rules, transitioning the job to `ACCEPTED`, `REVIEW_REQUIRED`, or `FAILED`.
+10. Artifact creation: Core artifacts (Markdown, `parse-result.json`, `manifest.json`) are finalized immediately. Heavy visual artifacts (`annotated.pdf`, `document.html`, `bundle.zip`) are generated lazily upon download or view.
 
 ## Main types and state
 
@@ -128,23 +128,23 @@ The application interacts with the following external systems and boundaries:
 
 ### OpenAI Responses API
 
-- **Endpoint**: Default `https://api.openai.com/v1` (overridable via `OPENAI_BASE_URL`).
-- **Model**: `gpt-5.6-luna`.
-- **Parameters**: `reasoning_effort="medium"`.
-- **Usage**: Invoked for Parse page refinement, independent checkbox crop verification, dedicated table structure review, downstream agentic capabilities (Classify, Section, Split, Extract), and grounded document chat.
-- **Contract**: Communication uses JSON structured outputs. Prompts are loaded from versioned Markdown templates under `src/agentic_extractor/prompts/` and tracked by SHA-256 digests in audit manifests.
+- Endpoint: Default `https://api.openai.com/v1` (overridable via `OPENAI_BASE_URL`).
+- Model: `gpt-5.6-luna`.
+- Parameters: `reasoning_effort="medium"`.
+- Usage: Invoked for Parse page refinement, independent checkbox crop verification, dedicated table structure review, downstream agentic capabilities (Classify, Section, Split, Extract), and grounded document chat.
+- Contract: Communication uses JSON structured outputs. Prompts are loaded from versioned Markdown templates under `src/agentic_extractor/prompts/` and tracked by SHA-256 digests in audit manifests.
 
 ### PP-DocLayoutV3 worker subprocess
 
-- **Path**: `tools/pp_doclayout/worker.py` executed with `tools/pp_doclayout/.venv/Scripts/python.exe`.
-- **Protocol**: Standard input/output pipe exchanging line-delimited JSON messages (`health`, `predict_layout`, `predict_tables`, `shutdown`).
-- **Isolation rationale**: PaddleX 3.4 and PaddlePaddle GPU 3.2 require specific OpenCV package configurations that conflict with the root application's dependencies. The subprocess maintains a dedicated worker lifecycle.
-- **Fail-safe boundary**: All output received across the subprocess pipe is treated as untrusted and validated against strict schemas in `src/agentic_extractor/layout.py`. Any schema violation raises `LayoutContractError`.
+- Path: `tools/pp_doclayout/worker.py` executed with `tools/pp_doclayout/.venv/Scripts/python.exe`.
+- Protocol: Standard input/output pipe exchanging line-delimited JSON messages (`health`, `predict_layout`, `predict_tables`, `shutdown`).
+- Isolation rationale: PaddleX 3.4 and PaddlePaddle GPU 3.2 require specific OpenCV package configurations that conflict with the root application's dependencies. The subprocess maintains a dedicated worker lifecycle.
+- Fail-safe boundary: All output received across the subprocess pipe is treated as untrusted and validated against strict schemas in `src/agentic_extractor/layout.py`. Any schema violation raises `LayoutContractError`.
 
 ### Hardware accelerator runtimes
 
-- **NVIDIA CUDA / cuDNN**: ONNX Runtime GPU (`onnxruntime-gpu>=1.29.0`) queries CUDA execution providers for RapidOCR inference.
-- **Paddle CUDA runtime**: `paddlepaddle-gpu==3.2.0` in the worker environment uses CUDA 12 packages (`nvidia-cuda-runtime-cu12`, `nvidia-cublas-cu12`).
+- NVIDIA CUDA / cuDNN: ONNX Runtime GPU (`onnxruntime-gpu>=1.29.0`) queries CUDA execution providers for RapidOCR inference.
+- Paddle CUDA runtime: `paddlepaddle-gpu==3.2.0` in the worker environment uses CUDA 12 packages (`nvidia-cuda-runtime-cu12`, `nvidia-cublas-cu12`).
 
 ## Document chat architecture
 
@@ -161,6 +161,6 @@ flowchart LR
     CitationValidator --> AnswerDisplay["Grounded answer and citations"]
 ```
 
-1. **Source isolation**: Chat requests consume only generated Parse Markdown. Uploaded binary files, page images, and raw OCR objects never enter the chat context.
-2. **Retrieval**: Documents are chunked by page boundaries and Markdown headers. If total text is under 40,000 characters, all text is supplied. Otherwise, a local lexical retrieval algorithm scores chunks and selects the top 12 excerpts.
-3. **Citation validation**: The model must return excerpt IDs matching the supplied chunks. If citation verification fails or the model returns unsubstantiated content, the system fails closed with an explicit insufficient-evidence message.
+1. Source isolation: Chat requests consume only generated Parse Markdown. Uploaded binary files, page images, and raw OCR objects never enter the chat context.
+2. Retrieval: Documents are chunked by page boundaries and Markdown headers. If total text is under 40,000 characters, all text is supplied. Otherwise, a local lexical retrieval algorithm scores chunks and selects the top 12 excerpts.
+3. Citation validation: The model must return excerpt IDs matching the supplied chunks. If citation verification fails or the model returns unsubstantiated content, the system fails closed with an explicit insufficient-evidence message.

@@ -27,5 +27,5 @@
 | Source-faithful view | The HTML viewer keeps the page raster as visual truth and overlays selectable text and evidence using canonical Parse coordinates. |
 | Workflow event | Audit entry recording state, action, provider, reason, elapsed time, warnings, and token/cost impact. |
 
-See [Architecture](architecture.md) for the runtime flow and
+See [Architecture](ARCHITECTURE.md) for the runtime flow and
 [Domain model](domain-model.md) for the full evidence and workflow contracts.

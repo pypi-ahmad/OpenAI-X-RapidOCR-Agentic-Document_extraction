@@ -70,19 +70,16 @@ Open [http://127.0.0.1:8841](http://127.0.0.1:8841), upload a PDF, PNG, JPEG,
 or single-frame TIFF document, select a mode, then choose **Extract document**.
 The application accepts uploads up to 50 MiB.
 
-On Windows, [`run_app.cmd`](../run_app.cmd) is the recommended convenience
-launcher. It:
+On Windows, [`run_app.cmd`](../run_app.cmd) is a convenience launcher. It:
 
 - checks that `uv` is available;
-- finds and prints unique listener PIDs specifically on TCP port `8841`;
+- finds and prints listener PIDs on TCP port `8841`;
 - revalidates each PID before stopping it;
 - confirms the port is free;
 - starts Streamlit in the foreground so logs remain visible; and
-- keeps the console open after either an error or normal exit.
+- keeps the console open after an error or exit.
 
-Because the launcher is explicitly designed to reclaim port `8841`, close an
-unrelated application using that port before launching if it must not be
-stopped.
+Because the launcher reclaims port `8841`, close any unrelated application using that port before launching if it should not be stopped.
 
 ## First extraction
 
@@ -241,7 +238,7 @@ resetting the session clears the session-only processed-document registry.
 
 - Return to the [project README](../README.md) for features, artifacts, and
   limitations.
-- Read the [architecture guide](architecture.md) for the pipeline and evidence
+- Read the [architecture guide](ARCHITECTURE.md) for the pipeline and evidence
   boundary.
 - Review [configuration](CONFIGURATION.md) for application settings.
 - Use the [local API guide](API.md) for typed programmatic access on port `8842`.

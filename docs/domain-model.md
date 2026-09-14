@@ -170,6 +170,6 @@ a new segment, must belong to the selected pages after the first selected page,
 and require an audit reason. An incomplete or ungrounded GPT split proposal is
 replaced with one safe segment and a review warning rather than dropping pages.
 
-See [Architecture](architecture.md) for runtime ownership and public pipeline
+See [Architecture](ARCHITECTURE.md) for runtime ownership and public pipeline
 boundaries, and [API](API.md) for the process-local job representations exposed
 over HTTP.

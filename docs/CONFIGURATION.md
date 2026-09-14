@@ -229,7 +229,7 @@ values:
   expected Python executable exist. Processing still initializes and probes the
   model, then records its actual device, Paddle versions, and layout/table
   timings. Table models initialize only when a qualifying table region is found.
-  <!-- VERIFY: Ensure PP-DocLayoutV3 and table-model assets are available in environments without network access. -->
+  <!-- VERIFY: Check that PP-DocLayoutV3 and table-model assets are available in environments without network access. -->
 
 Document chat requires OpenAI configuration but consumes only previously generated
 Markdown. It does not initialize RapidOCR or read the original uploaded document.

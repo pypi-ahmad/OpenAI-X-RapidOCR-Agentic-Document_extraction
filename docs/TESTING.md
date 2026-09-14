@@ -279,7 +279,7 @@ uv run python -m agentic_extractor.oracle_eval `
 
 The source, oracle, generated-output, and temporary report paths are intentionally ignored by Git.
 
-- [Development guide](DEVELOPMENT.md) — local setup, project commands, and
+- [Development guide](DEVELOPMENT.md): local setup, project commands, and
   coding conventions.
-- [Local API reference](API.md) — endpoint contracts and API testing context.
-- [Context engineering](CONTEXT-ENGINEERING.md) — lossless payload, batching, and telemetry checks.
+- [Local API reference](API.md): endpoint contracts and API testing context.
+- [Context engineering](CONTEXT-ENGINEERING.md): lossless payload, batching, and telemetry checks.

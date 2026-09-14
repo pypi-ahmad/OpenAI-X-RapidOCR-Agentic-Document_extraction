@@ -88,7 +88,7 @@ subsequent jobs.
 
 | Field | Type | Required | Rules |
 | --- | --- | --- | --- |
-| `file_name` | string | Yes | 1–255 characters; retained as document metadata |
+| `file_name` | string | Yes | 1 to 255 characters; retained as document metadata |
 | `content_base64` | string | Yes | Valid base64; decoded content must be nonempty and at most 50 MiB |
 | `mode` | string | No | `Balanced` by default, or `High Accuracy`; High Accuracy requires a grounded accepted outcome for every OCR block with confidence below `0.85` |
 | `selected_pages` | integer array or null | No | Positive, one-based page numbers; duplicates are removed and values sorted |
@@ -201,7 +201,7 @@ artifacts are rebuilt with the updated workflow and audit data.
 
 | Field | Type | Required | Rules |
 | --- | --- | --- | --- |
-| `schema_version` | string | Yes | 1–64 characters |
+| `schema_version` | string | Yes | 1 to 64 characters |
 | `schema` | object | Yes | Valid JSON Schema; stored internally with `x-schema-version` |
 | `business_rules` | object array | No | Defaults to an empty list |
 

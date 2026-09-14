@@ -42,7 +42,7 @@ listener on that port before starting the app.
 
 The Streamlit UI and FastAPI application both call the canonical workflow; do
 not add extraction logic directly to either entry point. See
-[Architecture](architecture.md) for engine order, public boundaries, and data
+[Architecture](ARCHITECTURE.md) for engine order, public boundaries, and data
 flow, and [API](API.md) for the local HTTP contract.
 
 ## Build and development commands
@@ -181,32 +181,31 @@ in `tests/test_local_artifacts.py` and `tests/test_export.py`.
 
 ## Code style
 
-- **Ruff** provides formatting and linting through `pyproject.toml`. It uses a
+- Ruff provides formatting and linting through `pyproject.toml`. It uses a
   100-character line length, targets Python 3.13, and enables the `E`, `F`,
   `I`, `UP`, `B`, and `SIM` lint rule groups. Run `uv run ruff format .` before
   submitting changes, then `uv run ruff check .`.
-- **ty** provides static type checking. Its Python version is configured as
+- ty provides static type checking. Its Python version is configured as
   3.13 in `pyproject.toml`; run `uv run ty check`.
-- **pytest** is configured in `pyproject.toml` to use strict markers, test the
+- pytest is configured in `pyproject.toml` to use strict markers, test the
   `tests` directory, and require at least 80% coverage for
   `agentic_extractor`.
 
 During iteration, override the repository addopts for a narrow test file, for
 example `uv run pytest -o addopts="" tests/test_timing.py`. Before handing off
-work, run the full `uv run pytest` command so the configured coverage gate is
-enforced. Tests marked `live` can make paid OpenAI requests and must run only
-with explicit authorization.
+work, run the full `uv run pytest` command so the 80% coverage check runs.
+Tests marked `live` can make paid OpenAI requests and must run only with
+explicit authorization.
 
 ## Branch conventions
 
-The repository's current default development branch is `main`. `CONTRIBUTING.md`
+The repository's default development branch is `main`. `CONTRIBUTING.md`
 documents short descriptive branch names and focused commits; no stricter
 repository-enforced convention is configured.
 
 ## Pull request process
 
-No pull-request template or repository-enforced review workflow is present in
-this checkout. For locally prepared changes:
+For locally prepared changes:
 
 - Preserve unrelated work and keep changes within the responsible module.
 - Add focused regression tests under `tests/` for behavior changes.
