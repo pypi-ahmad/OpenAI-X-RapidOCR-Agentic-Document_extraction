@@ -160,6 +160,8 @@ def document_markdown_with_checkboxes(
         if not page_checkboxes:
             rendered.append(f"<!-- page: {page.page} -->\n\n{page.markdown}")
             continue
+        # Geometric reading order: sort combined text chunks and checkboxes by
+        # (top, left) normalized coordinates to preserve natural reading order.
         items: list[tuple[float, float, str]] = []
         for chunk in page.chunks or build_layout_chunks(page.blocks):
             box = chunk.bbox or [0, 1, 0, 1]

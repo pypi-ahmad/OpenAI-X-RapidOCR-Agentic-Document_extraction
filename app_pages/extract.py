@@ -64,6 +64,8 @@ else:
                     value = json.loads(override)
                 except json.JSONDecodeError:
                     value = override
+                # Audit layer update: record human override in workflow and refresh
+                # manifests without mutating underlying OCR blocks.
                 st.session_state.workflow = record_user_override(
                     workflow, selected_field.path, value, reason
                 )

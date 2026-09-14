@@ -189,6 +189,7 @@ def _ink_measurements(
     binary: np.ndarray, x: int, y: int, width: int, height: int
 ) -> tuple[float, float]:
     crop = binary[y : y + height, x : x + width]
+    # Inset margin: 20% inset isolates interior check/fill marks from the box's outer border frame.
     margin = max(2, round(min(width, height) * 0.2))
     interior = crop[margin:-margin, margin:-margin]
     border_mask = np.ones(crop.shape, dtype=bool)
@@ -199,6 +200,8 @@ def _ink_measurements(
 
 
 def _state(interior_ink_ratio: float) -> CheckboxState:
+    # Empirical ink thresholds: <= 6% indicates empty box; >= 10% indicates mark ink;
+    # intermediate values abstain as NOT_DETERMINABLE.
     if interior_ink_ratio <= 0.06:
         return CheckboxState.UNCHECKED
     if interior_ink_ratio >= 0.10:

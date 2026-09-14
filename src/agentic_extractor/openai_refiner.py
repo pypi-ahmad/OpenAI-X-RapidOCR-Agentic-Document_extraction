@@ -715,6 +715,8 @@ class OpenAIRefiner:
             parsed = response.output_parsed
             if parsed is None:
                 raise RuntimeError("OpenAI returned no structured result.")
+            # Completeness invariant: Luna must acknowledge and review every requested page
+            # in the batch; partial reviews are rejected to preserve full document coverage.
             expected_pages = [page.page for page in batch]
             if sorted(parsed.reviewed_pages) != expected_pages:
                 raise RuntimeError("GPT-5.6-luna must review every requested page exactly once.")

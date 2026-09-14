@@ -236,6 +236,8 @@ def _ranked_chunks(
     query_counts = Counter(query_terms)
 
     def score(chunk: MarkdownExcerpt) -> tuple[float, int]:
+        # Scoring heuristics: heading matches receive 2x weight over body text,
+        # exact query substring match adds +5 bonus, and shorter chunks break ties.
         text_counts = Counter(_tokenize(chunk.markdown))
         heading_counts = Counter(_tokenize(chunk.heading or ""))
         relevance = sum(
@@ -251,6 +253,8 @@ def _ranked_chunks(
         key=score,
         reverse=True,
     )
+    # Fair representation: ensure each selected document contributes its top-scoring
+    # chunk before filling remaining quota with global top matches.
     selected: list[MarkdownExcerpt] = []
     for document in documents:
         document_chunks = chunks[document.document_id]

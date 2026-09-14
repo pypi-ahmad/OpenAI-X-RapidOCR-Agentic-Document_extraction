@@ -418,6 +418,8 @@ def create_app(
     )
     def download_artifact(job_id: str, artifact_name: str) -> Response:
         job = find_job(job_id)
+        # Security allowlist: prevents path traversal and restricts downloads
+        # strictly to pipeline-produced artifacts.
         if artifact_name not in _ARTIFACT_NAMES:
             raise _http_error(404, "artifact_not_found", "Unknown artifact.")
         content, media_type = _artifact_payload(job, artifact_name)
@@ -471,6 +473,8 @@ def _run_from_parse(job: _Job, request: DocumentRequest, refiner: Refiner) -> No
     try:
         if job.local is None:
             raise ValueError("Canonical Parse result is not available.")
+        # Defensive deepcopy: keeps canonical Parse evidence immutable across
+        # repeated extraction attempts against the same job.
         local, workflow = run_workflow_from_parse(copy.deepcopy(job.local), request, refiner)
         job.local = local
         job.workflow = workflow
@@ -491,6 +495,8 @@ def _run_from_parse(job: _Job, request: DocumentRequest, refiner: Refiner) -> No
 
 
 def _find(job_id: str, jobs: dict[str, _Job], *, now: float) -> _Job:
+    # Lazy in-memory cleanup: purges expired jobs on lookup to bound process
+    # memory without requiring a background reaper thread.
     expired = [
         key
         for key, candidate in jobs.items()

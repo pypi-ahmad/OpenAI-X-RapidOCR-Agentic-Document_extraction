@@ -1,11 +1,15 @@
 """Local Parse artifact generation from source images and grounded OCR evidence.
 
-Builds the cheap artifacts (Markdown, Parse JSON, manifest, checkbox crops) eagerly in
-`build_local_artifacts`, and exposes lazy, generate-once-under-lock access to the expensive
-ones (annotated PDF, coordinate HTML, ZIP) via `LocalArtifacts`. Must not mutate
-`LocalParseResult` or any raw OCR block, and must not generate a lazy artifact just because
-its metadata was inspected. See `landing_contract.py` for the public Parse JSON this composes
-and `layout_html.py` for the embedded HTML viewer.
+Responsible for: building cheap artifacts eagerly (Markdown, Parse JSON,
+manifest, checkbox crops) in `build_local_artifacts`, and providing thread-safe,
+generate-once lazy access to expensive artifacts (annotated PDF, coordinate
+HTML, and ZIP bundle) via `LocalArtifacts`.
+
+Must not: mutate `LocalParseResult` or any raw OCR block, and must not generate
+a lazy artifact merely because its metadata was inspected.
+
+Next: `landing_contract.py` for the public Parse JSON projection, and
+`layout_html.py` for the embedded coordinate HTML viewer.
 """
 
 from __future__ import annotations

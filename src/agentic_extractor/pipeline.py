@@ -406,6 +406,8 @@ def _plan_visual_review(local: LocalParseResult, request: DocumentRequest) -> No
 
 
 def _record_low_confidence_reviews(local: LocalParseResult, request: DocumentRequest) -> None:
+    # High Accuracy audit invariant: every block below LOW_CONFIDENCE_THRESHOLD (0.85)
+    # must have an explicit review status (accepted, abstained, rejected, or missing) in metadata.
     if request.mode is not ProcessingMode.HIGH_ACCURACY:
         return
     records_by_block: dict[str, list[RefinementRecord]] = {}

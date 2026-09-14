@@ -50,6 +50,8 @@ class _StructureParser(HTMLParser):
         values = dict(attrs)
         row_span = _positive_int(values.get("rowspan"))
         column_span = _positive_int(values.get("colspan"))
+        # Grid matrix tracking: skip column indices already occupied by earlier
+        # rows' row_span or preceding cells' col_span.
         column = 1
         while (self.row, column) in self._occupied:
             column += 1

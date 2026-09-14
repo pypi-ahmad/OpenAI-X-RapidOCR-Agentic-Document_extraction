@@ -1,14 +1,14 @@
 """Bounded process-memory caches for local derived document data.
 
-Responsible for the LRU eviction mechanism and the pixel-content hash used to
-key entries. It does NOT decide what belongs in a cache, or enforce that a
-cache key captures every input that can change a result (exact rendered
-pixels plus engine/model/version signature) — that invariant is owned by each
-caller (`ingest.py` for renders, `ocr.py`/`layout.py`/`table_structure.py` for
-model outputs), which must never key on something looser than the content
-actually consumed. Caches are process-memory only: they are never written to
-disk and disappear on process exit. Next: `ingest.py` for the first concrete
-use of `page_image_hash`."""
+Responsible for: thread-safe LRU byte caching (`ByteLRUCache`) and exact RGB
+pixel-content hashing (`page_image_hash`) used across local models.
+
+Must not: persist caches to disk (disappears on process exit), store mutable
+objects (byte payloads are immutable), or allow cache keys looser than the
+consumed image pixels and engine/version signature.
+
+Next: `ingest.py` for document rendering and cache key creation.
+"""
 
 from __future__ import annotations
 
