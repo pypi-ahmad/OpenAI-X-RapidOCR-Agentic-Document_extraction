@@ -5,7 +5,7 @@ not treat model output as human ground truth.
 
 ## Current review pack
 
-`masked-amerigroup-pages-1-2.review.json` covers pages 1–2 of the matching source PDF, identified
+`masked-amerigroup-pages-1-2.review.json` covers pages 1 and 2 of the matching source PDF, identified
 by SHA-256 rather than by path. It contains:
 
 - 3 page-2 table candidates with normalized boxes and expected grid counts;
@@ -13,9 +13,7 @@ by SHA-256 rather than by path. It contains:
 - 4 LandingAI checkbox-marker candidates rejected because the source image contains no control;
 - explicit provenance and review status.
 
-The candidate file is intentionally `pending_human_review`. An AI coding assistant localized the
-objects and used the supplied LandingAI result to seed table structure. This is useful annotation
-work, but it is not an independently human-labeled gold set.
+The candidate file is `pending_human_review`. An AI assistant localized the objects and used the supplied LandingAI result to seed table structure. It is not an independently human-labeled gold set.
 
 ## Human adjudication
 

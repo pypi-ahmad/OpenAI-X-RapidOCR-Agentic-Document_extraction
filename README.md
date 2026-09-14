@@ -1,16 +1,16 @@
 # Agentic document extractor
 
-Agentic document extractor is a local-machine document processing application that combines RapidOCR, PP-DocLayoutV3, and OpenAI `gpt-5.6-luna` to extract structured, source-grounded content from PDF, PNG, JPEG, and TIFF files. The system executes RapidOCR for immutable text and coordinate detection, runs PP-DocLayoutV3 in an isolated worker process for region identification and table structure parsing, and refines the extraction using `gpt-5.6-luna` with medium reasoning effort. It provides interactive navigation and inspection via a Streamlit user interface, an optional local FastAPI HTTP service, deterministic schema validation, and on-demand artifact export (annotated PDF, interactive coordinate HTML, and ZIP manifest bundles).
+Agentic document extractor processes PDF, PNG, JPEG, and TIFF files on a local machine. It runs RapidOCR for text and coordinate detection, PP-DocLayoutV3 in an isolated worker process for region and table parsing, and OpenAI `gpt-5.6-luna` (medium reasoning effort) for refinement. The project includes a Streamlit interface, an optional local FastAPI service, schema validation, and artifact export (annotated PDF, coordinate HTML, and ZIP bundles).
 
 ## Requirements
 
-The codebase has the following runtime and environment requirements derived from repository manifests and source configurations:
+Runtime and environment requirements:
 
-- **Operating system**: Windows (required). The PP-DocLayoutV3 worker configuration in `tools/pp_doclayout/pyproject.toml` is constrained to `sys_platform == 'win32'`, worker invocation in `src/agentic_extractor/layout.py` calls `.venv/Scripts/python.exe`, and the background service launcher `run_app.cmd` is a Windows batch script.
-- **Python version**: Python `>=3.13` for the main application (specified in `pyproject.toml` and `.python-version`); `>=3.13,<3.14` for the isolated layout worker environment (`tools/pp_doclayout/pyproject.toml`).
-- **Package manager**: `uv` is required to resolve dependencies and manage the dual virtual environments.
-- **OpenAI API credentials**: A valid `OPENAI_API_KEY` environment variable with access to the `gpt-5.6-luna` model.
-- **Hardware and accelerator**: Optional NVIDIA GPU with CUDA 12 support. RapidOCR uses `onnxruntime-gpu` with runtime fallback to CPU. The PP-DocLayoutV3 worker environment includes `paddlepaddle-gpu==3.2.0` with CPU fallback.
+- Operating system: Windows (required). The PP-DocLayoutV3 worker configuration in `tools/pp_doclayout/pyproject.toml` is constrained to `sys_platform == 'win32'`, worker invocation in `src/agentic_extractor/layout.py` calls `.venv/Scripts/python.exe`, and the background service launcher `run_app.cmd` is a Windows batch script.
+- Python version: Python `>=3.13` for the main application (specified in `pyproject.toml` and `.python-version`); `>=3.13,<3.14` for the isolated layout worker environment (`tools/pp_doclayout/pyproject.toml`).
+- Package manager: `uv` is required to resolve dependencies and manage the dual virtual environments.
+- OpenAI API credentials: A valid `OPENAI_API_KEY` environment variable with access to the `gpt-5.6-luna` model.
+- Hardware and accelerator: Optional NVIDIA GPU with CUDA 12 support. RapidOCR uses `onnxruntime-gpu` with runtime fallback to CPU. The PP-DocLayoutV3 worker environment includes `paddlepaddle-gpu==3.2.0` with CPU fallback.
 
 ## Setup and installation
 
@@ -161,7 +161,7 @@ OpenAI-X-RapidOCR-Agentic-Document_extraction/
 
 ## How to run tests
 
-The test suite uses `pytest` and enforces a strict minimum code coverage gate of 80% on `agentic_extractor`.
+The test suite uses `pytest` and requires at least 80% code coverage on `agentic_extractor`.
 
 Run the full test suite:
 
@@ -192,13 +192,13 @@ uv run pytest tests/test_prompt_quality_live.py -m live -s
 
 ## Known limitations
 
-- **Windows dependency**: The PP-DocLayoutV3 worker runtime is configured only for Windows (`tools/pp_doclayout/pyproject.toml` contains `sys_platform == 'win32'`), and `src/agentic_extractor/layout.py` explicitly targets the Windows virtual environment path `.venv/Scripts/python.exe`.
-- **Mandatory three-engine processing**: RapidOCR, PP-DocLayoutV3, and OpenAI `gpt-5.6-luna` are all required for a successful extraction. There is no offline-only, OCR-only, or single-engine fallback mode.
-- **In-memory job and cache lifecycle**: The FastAPI service and Streamlit app store job objects, upload data, and rendered page caches in process memory. API jobs expire after 3600 seconds (lazy cleanup on subsequent lookups). Restarting the process discards all jobs and cached data.
-- **Upload constraints**: Maximum upload size is 50 MiB, maximum page count is 200 pages, and maximum image resolution is 25,000,000 pixels. Multi-frame TIFFs are rejected.
-- **Security model**: The application and API are intended exclusively for trusted local-machine operation on `127.0.0.1`. No authentication, user authorization, or rate limiting is implemented.
-- **Document chat retrieval**: Document chat uses local lexical ranking rather than semantic vector embeddings. Questions containing vocabulary that diverges significantly from the generated Markdown text may fail to retrieve relevant passages.
-- **Heuristic scoring**: Checkbox detection, redaction detection, layout confidence, and image quality metrics use heuristic thresholds rather than calibrated probability models.
+- Windows dependency: The PP-DocLayoutV3 worker runtime is configured only for Windows (`tools/pp_doclayout/pyproject.toml` contains `sys_platform == 'win32'`), and `src/agentic_extractor/layout.py` targets the Windows virtual environment path `.venv/Scripts/python.exe`.
+- Mandatory three-engine processing: RapidOCR, PP-DocLayoutV3, and OpenAI `gpt-5.6-luna` are all required for extraction. There is no offline-only, OCR-only, or single-engine fallback mode.
+- In-memory job and cache lifecycle: The FastAPI service and Streamlit app store jobs, upload data, and rendered page caches in process memory. API jobs expire after 3,600 seconds with lazy cleanup on subsequent lookups. Restarting the process discards all jobs and cached data.
+- Upload constraints: Maximum upload size is 50 MiB, maximum page count is 200 pages, and maximum image resolution is 25,000,000 pixels. Multi-frame TIFFs are rejected.
+- Security model: The application and API run on `127.0.0.1` for local use. They include no authentication, authorization, or rate limiting.
+- Document chat retrieval: Document chat uses local lexical ranking rather than semantic vector embeddings. Questions with vocabulary that diverges significantly from the generated Markdown text may fail to retrieve relevant passages.
+- Heuristic scoring: Checkbox detection, redaction detection, layout confidence, and image quality metrics use heuristic thresholds rather than calibrated probability models.
 
 ## Documentation index
 
