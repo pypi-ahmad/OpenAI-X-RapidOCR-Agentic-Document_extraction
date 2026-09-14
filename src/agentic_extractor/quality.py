@@ -56,6 +56,8 @@ def preprocess_if_improved(
     diagnostic: PageQuality,
 ) -> tuple[Image.Image, list[str]]:
     """Retain transforms only after their corresponding diagnostic improves."""
+    # Measurable improvement invariant: image transforms are rolled back unless
+    # post-transform diagnostics confirm measurable improvement (e.g. skew reduced by >= 0.5°).
     candidate = image
     current = diagnostic
     actions: list[str] = []
