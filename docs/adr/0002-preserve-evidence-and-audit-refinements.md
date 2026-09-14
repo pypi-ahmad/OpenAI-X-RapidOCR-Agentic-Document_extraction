@@ -21,7 +21,7 @@ corrections are recorded separately as `FieldCorrection` entries on a copied
 workflow result. Unsupported, ungrounded, or schema-invalid fields cannot be
 verified.
 
-Annotated PDF, semantic HTML, Parse JSON, and workflow validation retain the
+Annotated PDF, coordinate-positioned HTML, Parse JSON, and workflow validation retain the
 same canonical grounding data.
 
 ## Consequences

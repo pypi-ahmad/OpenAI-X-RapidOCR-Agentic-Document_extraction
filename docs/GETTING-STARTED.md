@@ -3,18 +3,19 @@
 
 Run the Agentic Document Extractor locally to turn PDF and image documents into
 grounded Markdown, structured results, and downloadable artifacts. Every
-successful extraction uses RapidOCR followed by OpenAI `gpt-5.6-luna`.
+successful extraction uses RapidOCR, PP-DocLayoutV3, and then OpenAI
+`gpt-5.6-luna`.
 
 ## Prerequisites
 
-- Windows or Linux. The locked `onnxruntime-gpu` dependency does not provide a
-  macOS wheel.
+- Windows. The required PP-DocLayoutV3 worker uses a Windows-only uv
+  environment and expects its interpreter under `tools/pp_doclayout/.venv/Scripts`.
 - [`uv`](https://docs.astral.sh/uv/) for Python and dependency management.
-- Python `>=3.13`; `uv` manages the project interpreter (the repository pins
-  Python 3.13 in `.python-version`).
+- Python 3.13. The root project requires Python `>=3.13`, the layout worker
+  requires Python `>=3.13,<3.14`, and `.python-version` pins `3.13`.
 - An `OPENAI_API_KEY` for an account with access to `gpt-5.6-luna`.
-- An NVIDIA GPU is optional. The adapter requests CUDA only when ONNX Runtime
-  reports a usable CUDA execution-provider device; otherwise RapidOCR uses CPU.
+- An NVIDIA GPU is optional. RapidOCR and PP-DocLayoutV3 prefer a usable CUDA
+  device and can run on CPU when CUDA is unavailable.
 
 The supported v1 uploads are PDF, PNG, JPG/JPEG, and TIFF where Pillow can
 decode the source reliably. Documents are limited to 50 MiB and 200 pages.
@@ -33,13 +34,20 @@ decode the source reliably. Documents are limited to 50 MiB and 200 pages.
    cd OpenAI-X-RapidOCR-Agentic-Document_extraction
    ```
 
-3. Create or synchronize the local environment, including development tools.
+3. Create or synchronize the application environment, including development
+   tools.
 
    ```bash
    uv sync --all-groups
    ```
 
-4. Set the API key in the process environment. Do not add its value to source
+4. Create the required isolated PP-DocLayoutV3 environment from its lockfile.
+
+   ```bash
+   uv sync --project tools/pp_doclayout --locked
+   ```
+
+5. Set the API key in the process environment. Do not add its value to source
    files.
 
    ```powershell
@@ -78,19 +86,23 @@ stopped.
 
 ## First extraction
 
-1. Confirm that the sidebar reports both RapidOCR and OpenAI as available.
-   Missing or invalid configuration blocks processing; there is no OCR-only
-   fallback.
+1. Open **Diagnostics** and confirm that the OpenAI key is configured, RapidOCR
+   is installed, and the PP-DocLayoutV3 runtime is installed. The **Extract
+   document** button remains disabled when any required local readiness check
+   fails. Model access is validated after you start processing; there is no
+   reduced-engine fallback.
 2. Upload a supported PDF or image. File signatures and readability are checked,
    so changing an unsupported file's extension does not make it valid.
 3. For a PDF, choose an inclusive range satisfying
    `1 <= start_page <= end_page <= total_pages`. The initial range selects the
    full document. Images are treated as one page and do not show irrelevant
    range controls.
-4. Choose **Balanced** to send every selected page image with compact grounded
-   OCR/layout context, or **High Accuracy** to send every selected page image
-   with full relevant OCR evidence. In High Accuracy, each RapidOCR block with
-   recognition confidence strictly below `0.85` must receive a grounded,
+4. Choose **Balanced** for compact grounded OCR/layout context, or **High
+   Accuracy** for full relevant OCR evidence. Pages without a page-wide review
+   region receive a low-detail overview; locally identified uncertainty receives
+   high-detail crops, and a page-wide high-detail region replaces that overview.
+   In High Accuracy, each RapidOCR block
+   with recognition confidence strictly below `0.85` must receive a grounded,
    accepted confirmation or correction from the existing GPT page-refinement
    request. Missing, rejected, or abstained outcomes make the run
    `REVIEW_REQUIRED`; this check does not add another GPT call and is not
@@ -100,16 +112,21 @@ stopped.
    **Split**, or **Extract**. Classify requires an allowlist; split overrides
    require a reason; and Extract accepts guided fields, pasted or uploaded JSON
    Schema, or pasted or uploaded Markdown field definitions.
-6. Choose **Extract document**.
-7. Follow the progress percentage and review any warnings or failed pages. A
+6. Leave **Atomic grounding** enabled to include LandingAI-shaped
+   `atomic_grounding` parts arrays in the structured Parse JSON. Disabling it
+   omits those arrays without removing node-level page, range, or box grounding.
+7. Choose **Extract document**.
+8. Follow the progress percentage and review any warnings or failed pages. A
    completed run exposes rendered and raw Markdown, grounded blocks, workflow
    results, usage, and artifact downloads.
 
 The pipeline loads the full upload to validate and inspect the document, then
-limits OCR, GPT processing, and generated artifacts to the selected pages.
-Generated downloads include Markdown, canonical Parse JSON, an annotated PDF,
-a source-faithful HTML layout view, and a ZIP bundle. The ZIP includes an export
-manifest and any generated checkbox crops.
+limits OCR, layout analysis, GPT processing, and generated artifacts to the
+selected pages. Markdown and canonical Parse JSON are ready when processing
+finishes. The annotated PDF is generated when its result tab is opened; the
+source-faithful HTML view and ZIP bundle are generated when you choose their
+prepare actions. The ZIP includes an export manifest and any generated checkbox
+crops.
 Review the source preview and page-quality diagnostics before a paid run when
 scan quality is uncertain.
 
@@ -123,8 +140,9 @@ verified.
 
 After at least one Parse completes, open **Chat** from the top navigation. The
 newest processed document is selected initially; you can place up to 12
-session-processed documents in scope. Changing the selection clears the current
-chat so answers cannot silently carry context from an earlier scope.
+session-processed documents in scope. Chat history is stored per selected
+document scope. Switching scope loads its saved history, or starts empty for a
+new scope, so context is not mixed across scopes.
 
 Chat sends Luna only retrieved excerpts from the selected documents' generated
 Markdown and up to six recent visible conversation messages. It never sends the
@@ -135,6 +153,14 @@ the selected documents, and unsupported answers report insufficient evidence.
 Processed chat sources and messages live only in Streamlit session state. A
 browser-session reset or application restart removes them; process the document
 again to restore it to the chat selector.
+
+## Diagnostics
+
+Open **Diagnostics** before a first extraction to check the OpenAI configuration,
+RapidOCR package, and isolated PP-DocLayoutV3 runtime without exposing secret
+values. After processing a document, the page also shows deduplicated warnings,
+failed pages, per-stage timing, the slowest measured stage, and RapidOCR runtime
+details for the current result.
 
 ## Common setup issues
 
@@ -164,6 +190,18 @@ After the first OCR call, it also verifies that the detector session actually
 uses `CUDAExecutionProvider`; if not, it records CPU use and a warning. A
 RapidOCR initialization failure blocks extraction rather than falling back to
 GPT alone.
+
+### PP-DocLayoutV3 is unavailable or cannot initialize
+
+Synchronize the isolated worker environment from the repository root:
+
+```powershell
+uv sync --project tools/pp_doclayout --locked
+```
+
+Restart the application after synchronization. The worker prefers GPU and can
+use CPU when CUDA is unavailable. If it detects a CUDA device but GPU model
+initialization repeatedly fails, verify the NVIDIA driver before retrying.
 
 ### Port 8841 is already in use
 

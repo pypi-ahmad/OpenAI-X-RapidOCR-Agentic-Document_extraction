@@ -17,9 +17,9 @@
 
 | Task | Start here | Focused check |
 | --- | --- | --- |
-| OCR, CUDA, geometry | `src/agentic_extractor/ocr.py` | `tests/test_ocr.py tests/test_local_parse.py` |
-| Luna prompts or context | `src/agentic_extractor/openai_refiner.py` and `prompts/` | `tests/test_openai_refiner.py tests/test_prompt_resources.py` |
-| Routing and canonical Parse | `src/agentic_extractor/pipeline.py` and `parse.py` | `tests/test_hybrid_pipeline.py tests/test_routing.py` |
+| OCR, CUDA, geometry | `src/agentic_extractor/ocr.py` | `tests/test_local_parse.py` |
+| Luna prompts or context | `src/agentic_extractor/openai_refiner.py` and `src/agentic_extractor/prompts/` | `tests/test_openai_refiner.py tests/test_prompt_resources.py` |
+| Routing and canonical Parse | `src/agentic_extractor/pipeline.py` and `src/agentic_extractor/parse.py` | `tests/test_hybrid_pipeline.py tests/test_routing.py` |
 | Agentic workflows | `src/agentic_extractor/workflow.py` | `tests/test_workflow.py` |
 | Artifacts and manifests | `src/agentic_extractor/artifacts.py` | `tests/test_local_artifacts.py tests/test_export.py` |
 | Streamlit UI | `streamlit_app.py` and `app_pages/` | `tests/test_ui_state.py` |
