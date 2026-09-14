@@ -244,6 +244,8 @@ def _merge(left: _Candidate, right: _Candidate) -> _Candidate:
 
 
 def _tile_oversized(candidate: _Candidate) -> list[_Candidate]:
+    # Area bisection invariant: localized crops exceeding 15% of page area are
+    # recursively split along their longer dimension to preserve token budget.
     pending = [candidate]
     output: list[_Candidate] = []
     while pending:
@@ -292,6 +294,8 @@ def _region(page: int, ordinal: int, candidate: _Candidate) -> VisualReviewRegio
 
 
 def _pad(bbox: list[float], amount: float = 0.02) -> list[float]:
+    # Context padding: expand crops by 2% normalized page margin (clamped [0, 1])
+    # so Luna sees immediate surrounding context for characters/controls.
     return [
         max(0.0, bbox[0] - amount),
         max(0.0, bbox[1] - amount),
