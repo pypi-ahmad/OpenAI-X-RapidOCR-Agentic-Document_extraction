@@ -85,7 +85,7 @@ Official behavior:
 Project implication:
 
 - Gate the expensive table pipeline on credible layout/table evidence. Once gated in, retain the table region, classification, cell boxes, structure output, OCR source IDs, and matching decisions separately so evaluation can identify the failing stage.
-- Persist an accepted Luna repair back into the canonical table object, not only rendered Markdown. Validate row/column topology and ensure every cell is supported by OCR/layout evidence before publishing HTML.
+- Persist an accepted Luna repair back into the canonical table object, not only rendered Markdown. Validate row/column topology and verify every cell is supported by OCR/layout evidence before publishing HTML.
 - Fine-tune only the module demonstrated by labeled failures; PaddleOCR explicitly recommends diagnosing the failing table stage rather than treating table recognition as one opaque score.
 
 ## RapidOCR constraints that affect the canonical contract

@@ -71,13 +71,13 @@ The four-candidate method can increase local latency. It should run only when pr
 
 ## Sources
 
-1. [ONNX Runtime CUDA Execution Provider requirements and compatibility](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html#requirements) — official CUDA/cuDNN compatibility table.
-2. [ONNX Runtime preload DLLs](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html#preload-dlls) — official DLL-loading and diagnostic options.
-3. [ONNX Runtime Python API summary](https://onnxruntime.ai/docs/api/python/api_summary.html) — official provider/session API.
-4. [ONNX Runtime provider-factory source](https://github.com/microsoft/onnxruntime/blob/27e64f961d36fa34b8393fd1743fbc5cf579af16/onnxruntime/python/onnxruntime_pybind_state.cc) — source of the plugin-device warning.
-5. [RapidOCR combined-output source](https://github.com/RapidAI/RapidOCR/blob/main/python/rapidocr/utils/output.py) — authoritative output fields.
-6. [RapidOCR pipeline source](https://github.com/RapidAI/RapidOCR/blob/main/python/rapidocr/main.py) — detection/classification/recognition flow and combined-output construction.
-7. [RapidOCR classifier source](https://github.com/RapidAI/RapidOCR/blob/main/python/rapidocr/ch_ppocr_cls/main.py) — crop classifier and 180° rotation behavior.
+1. [ONNX Runtime CUDA Execution Provider requirements and compatibility](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html#requirements): official CUDA/cuDNN compatibility table.
+2. [ONNX Runtime preload DLLs](https://onnxruntime.ai/docs/execution-providers/CUDA-ExecutionProvider.html#preload-dlls): official DLL-loading and diagnostic options.
+3. [ONNX Runtime Python API summary](https://onnxruntime.ai/docs/api/python/api_summary.html): official provider/session API.
+4. [ONNX Runtime provider-factory source](https://github.com/microsoft/onnxruntime/blob/27e64f961d36fa34b8393fd1743fbc5cf579af16/onnxruntime/python/onnxruntime_pybind_state.cc): source of the plugin-device warning.
+5. [RapidOCR combined-output source](https://github.com/RapidAI/RapidOCR/blob/main/python/rapidocr/utils/output.py): authoritative output fields.
+6. [RapidOCR pipeline source](https://github.com/RapidAI/RapidOCR/blob/main/python/rapidocr/main.py): detection/classification/recognition flow and combined-output construction.
+7. [RapidOCR classifier source](https://github.com/RapidAI/RapidOCR/blob/main/python/rapidocr/ch_ppocr_cls/main.py): crop classifier and 180° rotation behavior.
 
 ## Rerun inputs
 

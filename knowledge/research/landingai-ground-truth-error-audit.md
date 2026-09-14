@@ -12,7 +12,7 @@ Under the user's explicit decision to treat the supplied LandingAI output as aut
 The highest-impact discrepancies are:
 
 1. LandingAI contains **9 HTML tables, 51 rows, and 146 cells**. Our saved Markdown contains **0 HTML tables**. It has only two pipe-table approximations on page 3; seven oracle tables are fully flattened.
-2. LandingAI contains **28 checkbox markers, all on page 2**. Ours contains **67 markers across pages 2–11**. At least 34 markers on pages 3–11 are definite false additions. Only one of our 67 checkbox records is marked automated, yet all records—including 66 review-required records—are published into Markdown.
+2. LandingAI contains **28 checkbox markers, all on page 2**. Ours contains **67 markers across pages 2 to 11**. At least 34 markers on pages 3 to 11 are definite false additions. Only one of our 67 checkbox records is marked automated, yet all records, including 66 review-required records, are published into Markdown.
 3. Page 4 is the worst structural failure. Two four-column infusion tables become interleaved text, bullet lists, and nine false checkbox markers.
 4. Page 11 loses the oracle's explicit signature semantics (`[E-SIGNED]`, `[SIGNED]`, `[ILLEGIBLE_SIGNATURE]`) and adds an unsupported heading, `Bhal m`.
 5. Our Parse JSON is internally inconsistent for repaired tables: page-3 review metadata says two tables were accepted, and Markdown contains two pipe grids, but `$.pages[2].table_structures[*]` still says `invalid` with empty cells.
@@ -163,7 +163,7 @@ Line spans below refer to the two Markdown files.
 
 ### Page 1
 
-**Oracle:** LandingAI lines 1–45. **Ours:** lines 1–58.
+**Oracle:** LandingAI lines 1 to 45. **Ours:** lines 1 to 58.
 
 - **Reading order / structure:** Oracle keeps `San Antonio / TX 78209`; ours orders `San Antonio / 78209 / TX` (`LandingAI:28-29`; ours `19-23`).
 - **Addition / formatting:** Ours emits isolated duplicate `Phone` and `Fax` labels and values (`ours:25-35`) instead of the oracle's compact sender block (`LandingAI:23-31`).
@@ -174,9 +174,9 @@ Severity: **medium**, because core fax content is present but key-value relation
 
 ### Page 2
 
-**Oracle:** lines 47–148. **Ours:** lines 59–286.
+**Oracle:** lines 47 to 148. **Ours:** lines 59 to 286.
 
-- **Table / structure omission:** Oracle has three provider/facility tables at lines 83–109, 38 cells total. Ours flattens all three into free text and checkbox bullets; corresponding JSON candidates `$.pages[1].table_structures[0:5]` are invalid and empty.
+- **Table / structure omission:** Oracle has three provider/facility tables at lines 83 to 109, 38 cells total. Ours flattens all three into free text and checkbox bullets; corresponding JSON candidates `$.pages[1].table_structures[0:5]` are invalid and empty.
 - **Checkbox substitution:** Oracle marks referring Nonparticipating and facility Nonparticipating; servicing-provider selection is represented by a separate table-cell `X` (`LandingAI:84,93,102`). Ours turns provider rows into repeated list controls (`ours:101-149`).
 - **Checkbox false additions:** Ours asserts `[x] TIN`, `[x] Planned inpatient`, `[x] Diagnostic study`, and two `[x] Home` markers (`ours:139,183,203,227,248`). Oracle has TIN as ordinary text, Planned inpatient/Diagnostic study/Home unchecked (`LandingAI:95,114,120,129`).
 - **Addition:** `- [ ] p2-cv20` exposes an internal candidate ID as document content (`ours:252`).
@@ -187,7 +187,7 @@ Severity: **critical**. This page contains authorization form decisions; false c
 
 ### Page 3
 
-**Oracle:** lines 150–233. **Ours:** lines 287–365.
+**Oracle:** lines 150 to 233. **Ours:** lines 287 to 365.
 
 - **Substitution:** `Birthdate : 3/31/1983` becomes `Birthdate: 3|31983` (`LandingAI:179`; ours `310`).
 - **Table / formatting:** Oracle has two HTML tables (`LandingAI:211-224`). Ours has two pipe tables (`ours:343-356`). Current source has already changed generic table serialization to HTML, so this formatting defect is snapshot-specific.
@@ -200,11 +200,11 @@ Severity: **high** because drug concentration punctuation and table roles matter
 
 ### Page 4
 
-**Oracle:** lines 235–304. **Ours:** lines 366–541.
+**Oracle:** lines 235 to 304. **Ours:** lines 366 to 541.
 
 - **Table omission:** Oracle has two four-column infusion tables with 54 cells (`LandingAI:265-290`). Ours has no table.
 - **Structure / reading order:** Column headers, times, fentanyl values, baclofen values, and session states are interleaved. `Beginning of Session` becomes `*BeginningofSessioni`; `Current Settings` becomes `wCurrentSettingst` (`ours:390,458`).
-- **Checkbox additions:** Nine false controls are attached to BACLOFEN, FENTANYL, Monday–Sunday, dose values, alarm text, and `Page 2` (`ours:392-538`).
+- **Checkbox additions:** Nine false controls are attached to BACLOFEN, FENTANYL, Monday through Sunday, dose values, alarm text, and `Page 2` (`ours:392-538`).
 - **Substitution:** Table values lose cell association; a dose such as `0.75 mcg` is emitted as both a bullet and a checked checkbox (`ours:488-496`).
 - **Formatting:** `ALARMS SETTINGS` loses the oracle heading semantics and an alarm interval becomes an unchecked control (`ours:525-531`).
 
@@ -212,7 +212,7 @@ Severity: **critical**. Values exist but their drug/time/session relationships a
 
 ### Page 5
 
-**Oracle:** lines 306–360. **Ours:** lines 542–607.
+**Oracle:** lines 306 to 360. **Ours:** lines 542 to 607.
 
 - **Omission:** Oracle `[REDACTED]` patient placeholder is absent (`LandingAI:323`).
 - **Table omission:** Oracle's pump and catheter tables contain 37 cells (`LandingAI:330-350`); ours flattens both.
@@ -224,7 +224,7 @@ Severity: **critical** for structured device data.
 
 ### Page 6
 
-**Oracle:** lines 362–518. **Ours:** lines 608–694.
+**Oracle:** lines 362 to 518. **Ours:** lines 608 to 694.
 
 - **Omission:** Oracle `Patient Name: [REDACTED]` and `DOB: [REDACTED]` become empty labels (`LandingAI:380-381`; ours `625-626`).
 - **Substitution:** `(Years)` becomes `(ears)` (`ours:617`).
@@ -236,7 +236,7 @@ Severity: **high** because redaction placeholders and false controls are semanti
 
 ### Page 7
 
-**Oracle:** lines 520–601. **Ours:** lines 695–815.
+**Oracle:** lines 520 to 601. **Ours:** lines 695 to 815.
 
 - **Omission:** Oracle redaction placeholders in header/name/DOB are absent (`LandingAI:536-538`; ours `709-717`).
 - **Substitution:** `musculoskeletal` becomes `musculoskelatal` (`ours:719`).
@@ -248,7 +248,7 @@ Severity: **critical** for identifier fidelity.
 
 ### Page 8
 
-**Oracle:** lines 603–680. **Ours:** lines 816–925.
+**Oracle:** lines 603 to 680. **Ours:** lines 816 to 925.
 
 - **Omission:** `[REDACTED]` name and DOB placeholders are absent (`LandingAI:621-622`; ours `831-832`).
 - **Checkbox additions:** Four false controls attach to page/header text and internal ID `p8-cv4` (`ours:829,837,839,877`).
@@ -259,7 +259,7 @@ Severity: **high**, dominated by false controls and redaction omission.
 
 ### Page 9
 
-**Oracle:** lines 682–760. **Ours:** lines 926–1026.
+**Oracle:** lines 682 to 760. **Ours:** lines 926 to 1026.
 
 - **Omission:** Oracle redaction placeholders are absent (`LandingAI:700-701`; ours `941-942`).
 - **Checkbox additions:** Four false controls attach to page/header text and `p9-cv4` (`ours:939,948,950,1001`).
@@ -271,7 +271,7 @@ Severity: **high**. Main medication/dose content survives, but footer grounding 
 
 ### Page 10
 
-**Oracle:** lines 762–846. **Ours:** lines 1027–1126.
+**Oracle:** lines 762 to 846. **Ours:** lines 1027 to 1126.
 
 - **Reading order:** Our fax receipt footer appears at the top of the page (`ours:1029`), while the oracle places it at the bottom.
 - **Substitution:** Oracle header `UGTAM0001/F DOB` becomes `JGTAM0001/F DOB` (`LandingAI:778`; ours `1037`).
@@ -283,7 +283,7 @@ Severity: **high**; narrative prose is otherwise close.
 
 ### Page 11
 
-**Oracle:** lines 848–end. **Ours:** lines 1127–end.
+**Oracle:** lines 848 to end. **Ours:** lines 1127 to end.
 
 - **Substitution:** `HUGTAM0001/F DOB (61 Years)` becomes `UGTAM0001/F DOP` plus a detached `Years)` (`LandingAI:864`; ours `1136-1138`).
 - **Omission:** `[E-SIGNED]`, `[SIGNED]`, and `[ILLEGIBLE_SIGNATURE]` are absent (`LandingAI:874,878-879`).
@@ -335,11 +335,11 @@ These heuristics explain detached labels, repeated line fragments, lost marginal
 
 ### F. High-resolution routing can still expand to nearly a full page
 
-Recent code stopped routing every dense form/table row automatically and targets invalid tables more precisely. That is an improvement after this snapshot. But `ambiguous_reading_order` still envelopes all grounded blocks into one padded candidate (`visual_routing.py:105-126`), and merging candidates can create near-page crops. The snapshot records 94–99% high-resolution area on every page, increasing cost and making Luna reconcile excessive evidence.
+Recent code stopped routing every dense form/table row automatically and targets invalid tables more precisely. That is an improvement after this snapshot. But `ambiguous_reading_order` still envelopes all grounded blocks into one padded candidate (`visual_routing.py:105-126`), and merging candidates can create near-page crops. The snapshot records 94% to 99% high-resolution area on every page, increasing cost and making Luna reconcile excessive evidence.
 
 ### G. High-confidence OCR errors evade correction
 
-Examples such as `195.1-458.0`, `JGTAM0001/F DOB`, and `UGTAM0001/F DOP` have RapidOCR scores around 0.97–0.99 in `$.pages[*].blocks[*]`. Confidence-only routing therefore treats them as safe. A domain-aware identifier validator or Luna visual comparison must override raw confidence for risky patterns.
+Examples such as `195.1-458.0`, `JGTAM0001/F DOB`, and `UGTAM0001/F DOP` have RapidOCR scores around 0.97 to 0.99 in `$.pages[*].blocks[*]`. Confidence-only routing therefore treats them as safe. A domain-aware identifier validator or Luna visual comparison must override raw confidence for risky patterns.
 
 ## Prioritized fixes and oracle-based acceptance tests
 
@@ -349,7 +349,7 @@ Examples such as `195.1-458.0`, `JGTAM0001/F DOB`, and `UGTAM0001/F DOP` have Ra
 
 **Acceptance against this oracle:**
 
-- pages 1 and 3–11: zero checkbox markers;
+- pages 1 and 3 to 11: zero checkbox markers;
 - page 2: exactly 28 markers with oracle labels/order/states;
 - `Home`, Planned inpatient, and Diagnostic study are unchecked;
 - no internal candidate ID appears in Markdown;
@@ -383,7 +383,7 @@ Examples such as `195.1-458.0`, `JGTAM0001/F DOB`, and `UGTAM0001/F DOP` have Ra
 - `I95.1` and `I73.9`, not `195.1`/`173.9`;
 - `2,000.0 mcg/mL`, not `mċg` or `2,000:0`;
 - `≥`, not `>/=`;
-- oracle redaction placeholders on pages 5–10;
+- oracle redaction placeholders on pages 5 to 10;
 - page-11 E-signed/signed/illegible-signature semantics, with no `Bhal m`.
 
 ### P1. Build one accepted semantic hierarchy
@@ -400,7 +400,7 @@ Examples such as `195.1-458.0`, `JGTAM0001/F DOB`, and `UGTAM0001/F DOP` have Ra
 
 ### P2. Turn this oracle into a regression fixture
 
-**Fix:** Store normalized expected Markdown semantics—not protected/private source content in ordinary public tests unless authorized—as a page/table/control error manifest. Build evaluators for text substitutions, element presence/order, tables, checkboxes, grounding consistency, latency, and cost.
+**Fix:** Store normalized expected Markdown semantics (not protected or private source content in ordinary public tests unless authorized) as a page/table/control error manifest. Build evaluators for text substitutions, element presence/order, tables, checkboxes, grounding consistency, latency, and cost.
 
 **Acceptance dashboard:**
 

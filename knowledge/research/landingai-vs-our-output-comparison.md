@@ -10,7 +10,7 @@
 
 LandingAI's supplied output is materially better at **semantic document reconstruction**. It groups the page into a small number of meaningful elements, reconstructs nine tables with cell spans and reading order, and represents the form checkboxes conservatively. Our supplied snapshot is stronger at **local auditability and deliverable breadth**: it retains raw OCR geometry and confidence, GPT refinements, quality diagnostics, usage/cost records, an annotated PDF, coordinate-positioned HTML, checkbox crops, and a checksummed manifest.
 
-The largest quality gap is not basic OCR. Normalized character-sequence agreement with the LandingAI ground truth is high on most pages (0.801–0.977 on 9 of 11 pages). The gap is **structure**:
+The largest quality gap is not basic OCR. Normalized character-sequence agreement with the LandingAI ground truth is high on most pages (0.801 to 0.977 on 9 of 11 pages). The gap is **structure**:
 
 - LandingAI emits 9 HTML tables, 51 rows, and 146 grounded cells.
 - Our snapshot emits no HTML tables. Twelve local table candidates were marked invalid; two were recorded as GPT-corrected in review metadata, but no table structure reached the exported Markdown.
@@ -112,7 +112,7 @@ LandingAI officially defines chunks as discrete semantic elements and documents 
 
 LandingAI reconstructs nine HTML tables with 51 rows and 146 cells. The output preserves `rowspan` and `colspan`, and its JSON grounds tables and individual cells with row/column/span indices. This directly follows LandingAI's documented format: table chunks use HTML, and individual cells may have IDs, coordinates, row/column positions, and spans.[^landing-markdown][^landing-json]
 
-Our snapshot detects 12 possible tables across pages 1–5, but all 12 page-level structures are stored as invalid with zero cells. Review metadata reports two page-3 tables as accepted/corrected and ten as unresolved/abstained, yet the accepted corrections are not materialized into `document.md`; the exported Markdown contains zero `<table>` elements.
+Our snapshot detects 12 possible tables across pages 1 to 5, but all 12 page-level structures are stored as invalid with zero cells. Review metadata reports two page-3 tables as accepted/corrected and ten as unresolved/abstained, yet the accepted corrections are not materialized into `document.md`; the exported Markdown contains zero `<table>` elements.
 
 Page 4 shows the user impact:
 
@@ -125,11 +125,11 @@ Abstaining from invalid local geometry is safer than inventing a grid, but the c
 
 ### 4. Checkboxes: our high-recall strategy produces false semantics
 
-LandingAI's page-2 form contains 28 checkbox markers in Markdown: 5 `[x]` and 23 `[ ]`. Our Markdown contains 67: 34 `[x]`, 32 `[ ]`, and one uncertain marker. Our canonical JSON likewise contains 67 checkbox records, including repeated page-wide candidates on pages 3–11 where the content is predominantly reports and prose rather than checkbox forms.
+LandingAI's page-2 form contains 28 checkbox markers in Markdown: 5 `[x]` and 23 `[ ]`. Our Markdown contains 67: 34 `[x]`, 32 `[ ]`, and one uncertain marker. Our canonical JSON likewise contains 67 checkbox records, including repeated page-wide candidates on pages 3 to 11 where the content is predominantly reports and prose rather than checkbox forms.
 
 Our records often acknowledge the weakness: the sample checkbox has `decision_status: review_required`, `agreement: incomplete`, and no local-vision state. However, these candidates are still rendered as semantic checkbox Markdown. This violates the intended policy boundary: uncertain detection is being displayed as document content rather than only as review metadata.
 
-On page 4, ordinary headers and numeric values become checked boxes—for example BACLOFEN, FENTANYL, and dosage entries. This is not a minor formatting issue; `[x]` asserts a source state absent from the supplied comparison output.
+On page 4, ordinary headers and numeric values become checked boxes, such as BACLOFEN, FENTANYL, and dosage entries. This is not a minor formatting issue; `[x]` asserts a source state absent from the supplied comparison output.
 
 The remedy is precision-first publication: only emit `[x]`/`[ ]` when control geometry, a unique grounded label, local visual classification, and Luna agree. Keep all other candidates in diagnostics as `REVIEW_REQUIRED`, never in canonical Markdown.
 
@@ -177,7 +177,7 @@ LandingAI reports 13,339 ms for the 11-page Parse. Our manifest records:
 - checkbox detection: 0.60 seconds;
 - GPT: 354.19 cumulative seconds across 13 calls.
 
-The GPT calls comprise 11 page refinement calls, one checkbox-verification call, and one full-document repair call. They use 420,092 input tokens, including 55,468 cached tokens, plus 44,231 output tokens. Every page was routed with a high-resolution crop covering roughly 94–99% of the page, so “uncertain-region” routing behaved almost like another full-page pass.
+The GPT calls comprise 11 page refinement calls, one checkbox-verification call, and one full-document repair call. They use 420,092 input tokens, including 55,468 cached tokens, plus 44,231 output tokens. Every page was routed with a high-resolution crop covering roughly 94% to 99% of the page, so “uncertain-region” routing behaved almost like another full-page pass.
 
 Three implications follow:
 
@@ -205,7 +205,7 @@ But cost per page is not the right success metric when the output loses all nine
 
 ## Prioritized improvements
 
-### P0 — Correct semantic publication boundaries
+### P0: Correct semantic publication boundaries
 
 1. **Never publish uncertain checkboxes as `[x]` or `[ ]`.** Require agreement between control geometry, local vision state, unique label grounding, and Luna. Otherwise retain only a review candidate.
 2. **Persist accepted table repairs into the canonical page/chunk/Markdown layers.** A review metadata status of `accepted` is insufficient if the accepted grid is absent from the document.
@@ -213,7 +213,7 @@ But cost per page is not the right success metric when the output loses all nine
 
 Acceptance measure: reproduce all nine LandingAI reference tables, 51 rows, 146 cells, their spans, and their grounded content; match the LandingAI checkbox states and labels without publishing additional controls.
 
-### P1 — Reduce fragmentation before Luna
+### P1: Reduce fragmentation before Luna
 
 4. Build deterministic line-to-region grouping using layout regions, whitespace, alignment, font/height proxies, and repeated-margin detection.
 5. Send semantic regions rather than hundreds of raw blocks. Preserve the raw block IDs behind each region.
@@ -221,7 +221,7 @@ Acceptance measure: reproduce all nine LandingAI reference tables, 51 rows, 146 
 
 Acceptance measure: reduce semantic chunks on this sample without losing source text or grounding; eliminate fragmented strings and label/value separation in tables/forms.
 
-### P1 — Make visual routing genuinely selective
+### P1: Make visual routing genuinely selective
 
 7. Stop treating almost-full-page merged regions as “uncertain regions.” Cap crop expansion and high-resolution area ratio.
 8. Use one low-resolution page overview for layout plus high-resolution crops only for unresolved tables, checkboxes, low-confidence text, signatures, and conflicting reading order.
@@ -229,7 +229,7 @@ Acceptance measure: reduce semantic chunks on this sample without losing source 
 
 Acceptance measure: reduce GPT input well below 420K tokens and avoid any repair call above the largest individual page context, without decreasing gold-set F1.
 
-### P1 — Fix the local layout bottleneck
+### P1: Fix the local layout bottleneck
 
 10. Restore PP-DocLayoutV3 GPU execution or replace it with a measured faster layout path on this hardware.
 11. Keep layout/table models warm and cache by page image hash and model configuration.
@@ -237,7 +237,7 @@ Acceptance measure: reduce GPT input well below 420K tokens and avoid any repair
 
 Acceptance measure: record authoritative end-to-end wall time and cold/warm stage timings; target warm local preprocessing below LandingAI's 13.3-second sample time before Luna, or clearly document the local-hardware tradeoff.
 
-### P2 — Establish a real evaluation harness
+### P2: Establish a real evaluation harness
 
 13. Version the supplied LandingAI Markdown and Parse JSON as the regression oracle for text, reading order, table cells/spans, checkbox state/label, marginalia, and attestations.
 14. Report CER/WER, reading-order accuracy, table TEDS or cell F1, checkbox precision/recall/state accuracy, grounding IoU, abstention precision, latency, and cost.
@@ -257,7 +257,7 @@ Acceptance measure: versioned LandingAI-reference evaluation data plus reproduci
 
 ## Conclusion
 
-Our app is not yet output-equivalent to LandingAI ADE on this sample. It has a stronger local evidence ledger and a better artifact package, but LandingAI produces the more useful canonical document because it converts visual layout into compact, grounded semantic structure—particularly tables—without flooding the Markdown with uncertain checkbox states.
+Our app is not yet output-equivalent to LandingAI ADE on this sample. It has a stronger local evidence ledger and a better artifact package, but LandingAI produces the more useful canonical document because it converts visual layout into compact, grounded semantic structure (particularly tables) without flooding the Markdown with uncertain checkbox states.
 
 The shortest path to improvement is not adding more detectors or more GPT context. It is tightening publication rules, persisting validated table repairs, grouping OCR evidence before refinement, and measuring against the versioned LandingAI reference tables and controls. Those changes should improve agreement, latency, and cost together.
 

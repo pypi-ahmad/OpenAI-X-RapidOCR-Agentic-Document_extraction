@@ -1,7 +1,7 @@
 # Deep Research: PaddlePaddle Document Layout Models and PP-StructureV3
 
 **Research date:** 2026-08-30  
-**Depth:** Thorough (10–15 minute collection target)  
+**Depth:** Thorough (10 to 15 minute collection target)  
 **Evidence policy:** First-party PaddlePaddle/PaddleOCR/PaddleX sources, official Hugging Face model repositories, and the authors' technical report only.
 
 ## Executive summary
@@ -29,7 +29,7 @@ The critical distinction is **layout detection versus document parsing**. Detect
 
 ### Architecture and intended behavior
 
-The authors describe RT-DocLayout as a 33-million-parameter, non-autoregressive model built on RT-DETR. It adds a mask head for pixel-level regions and predicts pairwise precedence relationships from Transformer queries. An antisymmetric relation matrix is converted to a global sequence by a voting-based ranking strategy. Classification, bounding-box, generalized-IoU, mask, Dice, and order losses are trained jointly; the paper gives the order loss a much larger weight because it receives fewer and more diluted optimization signals. PaddleX documentation additionally names PPHGNetV2-L as the backbone. [RT-DocLayout §§3.1–3.3](https://arxiv.org/html/2606.23344#S3) · [PaddleX layout-analysis overview](https://github.com/PaddlePaddle/PaddleX/blob/release/3.4/docs/module_usage/tutorials/ocr_modules/layout_analysis.en.md)
+The authors describe RT-DocLayout as a 33-million-parameter, non-autoregressive model built on RT-DETR. It adds a mask head for pixel-level regions and predicts pairwise precedence relationships from Transformer queries. An antisymmetric relation matrix is converted to a global sequence by a voting-based ranking strategy. Classification, bounding-box, generalized-IoU, mask, Dice, and order losses are trained jointly; the paper gives the order loss a much larger weight because it receives fewer and more diluted optimization signals. PaddleX documentation additionally names PPHGNetV2-L as the backbone. [RT-DocLayout sections 3.1 to 3.3](https://arxiv.org/html/2606.23344#S3) · [PaddleX layout-analysis overview](https://github.com/PaddlePaddle/PaddleX/blob/release/3.4/docs/module_usage/tutorials/ocr_modules/layout_analysis.en.md)
 
 The training paper reports 38,000 internally curated document images from academic papers, textbooks, financial reports, slides, newspapers, exams, invoices, receipts, and other domains. It says every element was manually annotated with a boundary, category, and absolute reading order, and that physical-spatial augmentations simulate page warping and camera projection. This is useful evidence of intended robustness, but the training corpus is not publicly described sufficiently to establish representativeness for a particular production domain. [RT-DocLayout §4.1.1](https://arxiv.org/html/2606.23344#S4.SS1.SSS1) · [RT-DocLayout §3.4](https://arxiv.org/html/2606.23344#S3.SS4)
 
@@ -76,7 +76,7 @@ Runtime parameters include an explicit `device` such as `gpu:0` or `cpu`, input 
 Two first-party measurements use different protocols:
 
 - The PaddleX module table reports **23.77 ms on an A100** and **126 MB model storage**, explicitly excluding pre- and post-processing. It does not publish a detection AP value in that table. [PaddleX supported model table](https://github.com/PaddlePaddle/PaddleX/blob/release/3.4/docs/module_usage/tutorials/ocr_modules/layout_analysis.en.md#ii-supported-model-list)
-- The paper reports **132.1 FPS** for the 33M-parameter model on an NVIDIA A100 at **batch size 32**, then reports downstream parsing scores when the layout model is coupled to separate recognizers. With PaddleOCR-VL-1.5-0.9B, it reports 94.50 overall on OmniDocBench v1.5 and 92.05 overall on Real5-OmniDocBench. Those “overall” scores combine downstream text, formula, table, and reading-order dimensions and are not standalone layout precision or OCR character accuracy. [RT-DocLayout §4.1.3 and Tables 1–2](https://arxiv.org/html/2606.23344#S4.SS1.SSS3) · [RT-DocLayout §§4.2.1–4.2.2](https://arxiv.org/html/2606.23344#S4.SS2)
+- The paper reports **132.1 FPS** for the 33M-parameter model on an NVIDIA A100 at **batch size 32**, then reports downstream parsing scores when the layout model is coupled to separate recognizers. With PaddleOCR-VL-1.5-0.9B, it reports 94.50 overall on OmniDocBench v1.5 and 92.05 overall on Real5-OmniDocBench. Those “overall” scores combine downstream text, formula, table, and reading-order dimensions and are not standalone layout precision or OCR character accuracy. [RT-DocLayout §4.1.3 and Tables 1 and 2](https://arxiv.org/html/2606.23344#S4.SS1.SSS3) · [RT-DocLayout sections 4.2.1 to 4.2.2](https://arxiv.org/html/2606.23344#S4.SS2)
 
 The paper's ablation shows its strongest gains on warped and skewed subsets after distortion-aware augmentation, and lower reading-order edit distance after coupled order learning. This supports testing the model on camera-captured or distorted pages, but it does not establish equivalent gains on this application's forms, checkboxes, or private-document mix. [RT-DocLayout §4.3](https://arxiv.org/html/2606.23344#S4.SS3)
 
@@ -84,7 +84,7 @@ The paper's ablation shows its strongest gains on warped and skewed subsets afte
 
 PP-DocLayout-L is an RT-DETR-L detector trained on a Paddle-built Chinese/English document dataset. The official table reports **90.4 mAP@0.5**, **123.76 MB**, **33.59 ms GPU model inference**, and **503.01/251.08 ms CPU normal/high-performance model inference**. The evaluation set contains only 500 internally built images, and the timing excludes pre- and post-processing; therefore the figures should be used for relative orientation, not as an application latency or general-domain accuracy SLA. [PaddleOCR layout-detection model table and notes](https://www.paddleocr.ai/main/en/version3.x/module_usage/layout_detection.html#2-supported-model-list)
 
-Its shipped metadata uses a fixed **640×640** resize, a `DETR` architecture, default threshold `0.5`, and 23 labels. Unlike V3, its documented result contains only boxes—not masks/polygons or learned order. [PP-DocLayout-L `inference.yml`](https://huggingface.co/PaddlePaddle/PP-DocLayout-L/blob/main/inference.yml) · [PP-DocLayout-L model card](https://huggingface.co/PaddlePaddle/PP-DocLayout-L)
+Its shipped metadata uses a fixed **640×640** resize, a `DETR` architecture, default threshold `0.5`, and 23 labels. Unlike V3, its documented result contains only boxes, not masks/polygons or learned order. [PP-DocLayout-L `inference.yml`](https://huggingface.co/PaddlePaddle/PP-DocLayout-L/blob/main/inference.yml) · [PP-DocLayout-L model card](https://huggingface.co/PaddlePaddle/PP-DocLayout-L)
 
 The artifact's label order is:
 
@@ -117,7 +117,7 @@ Paddle reports PP-StructureV3 document-parsing edit scores on OmniDocBench, incl
 
 ### Current PaddleX 3.4 path
 
-PaddleX 3.4 documentation supports Python 3.8–3.13 and recommends installing PaddlePaddle first, followed by the PaddleX wheel. For inference-only integration it documents `pip install paddlex`, `paddlex[base]`, or the narrower `paddlex[ocr]`; source/plugin installation is intended for retraining or framework modification. [PaddleX installation guide](https://github.com/PaddlePaddle/PaddleX/blob/release/3.4/docs/installation/installation.en.md)
+PaddleX 3.4 documentation supports Python 3.8 to 3.13 and recommends installing PaddlePaddle first, followed by the PaddleX wheel. For inference-only integration it documents `pip install paddlex`, `paddlex[base]`, or the narrower `paddlex[ocr]`; source/plugin installation is intended for retraining or framework modification. [PaddleX installation guide](https://github.com/PaddlePaddle/PaddleX/blob/release/3.4/docs/installation/installation.en.md)
 
 GPU use requires a PaddlePaddle GPU build that matches a supported CUDA line, not merely an installed NVIDIA driver. The release/3.4 guide gives CUDA 11.8 and 12.6 wheel indexes and recommends verifying with `import paddle; print(paddle.__version__)`. For Paddle-TensorRT it documents TensorRT 8.6.1.6 for CUDA 11.8; other combinations must follow the compatibility documentation. Windows 50-series GPU support is called out separately with development wheels and known limitations. [PaddlePaddle installation guide for PaddleX 3.4](https://github.com/PaddlePaddle/PaddleX/blob/release/3.4/docs/installation/paddlepaddle_install.en.md)
 
@@ -137,7 +137,7 @@ The project should initially use local in-process inference. PaddleX/PaddleOCR a
 
 The requested GitHub README was last materially updated in 2022 and documents a PaddlePaddle `>=2.3` plus cloned PaddleDetection workflow around PicoDet. It covers older English PubLayNet-style categories, Chinese CDLA categories, training, distillation, export, and standalone inference. [legacy README](https://github.com/PaddlePaddle/PaddleOCR/blob/main/ppstructure/layout/README.md) · [file history](https://github.com/PaddlePaddle/PaddleOCR/commits/main/ppstructure/layout/README.md)
 
-Its installation anchors—[Install](https://github.com/PaddlePaddle/PaddleOCR/blob/main/ppstructure/layout/README.md#3-install), [Install PaddlePaddle](https://github.com/PaddlePaddle/PaddleOCR/blob/main/ppstructure/layout/README.md#31-install-paddlepaddle), and [Install PaddleDetection](https://github.com/PaddlePaddle/PaddleOCR/blob/main/ppstructure/layout/README.md#32-install-paddledetection)—remain useful only for reproducing that legacy training stack. They should not be combined with modern `paddleocr LayoutDetection`, `paddlex.create_model`, or PP-DocLayoutV3 examples. The modern inference path is the PaddleOCR/PaddleX 3.x wheel API. [current PaddleX layout detection guide](https://paddlepaddle.github.io/PaddleX/3.4/en/module_usage/tutorials/ocr_modules/layout_detection.html)
+Its installation anchors ([Install](https://github.com/PaddlePaddle/PaddleOCR/blob/main/ppstructure/layout/README.md#3-install), [Install PaddlePaddle](https://github.com/PaddlePaddle/PaddleOCR/blob/main/ppstructure/layout/README.md#31-install-paddlepaddle), and [Install PaddleDetection](https://github.com/PaddlePaddle/PaddleOCR/blob/main/ppstructure/layout/README.md#32-install-paddledetection)) remain useful only for reproducing that legacy training stack. They should not be combined with modern `paddleocr LayoutDetection`, `paddlex.create_model`, or PP-DocLayoutV3 examples. The modern inference path is the PaddleOCR/PaddleX 3.x wheel API. [current PaddleX layout detection guide](https://paddlepaddle.github.io/PaddleX/3.4/en/module_usage/tutorials/ocr_modules/layout_detection.html)
 
 ## 7. Version drift and contract hazards
 
@@ -192,7 +192,7 @@ These fields derive directly from the published result contract and preserve the
 
 1. **Reading order:** use V3 order as a strong local candidate instead of relying only on geometric XY sorting; send conflicts to Luna. The paper's ablations provide evidence that jointly learned order helps on complex and distorted layouts, although project-specific validation remains necessary. [RT-DocLayout §4.3](https://arxiv.org/html/2606.23344#S4.SS3)
 2. **Context selection:** region labels can keep headers/footers separate, identify tables/forms/images, and support smaller evidence-bearing Luna prompts. This is an architectural inference; no first-party source measures Luna token savings.
-3. **Better crops:** V3 polygons can define tighter uncertain-region crops on curved/skewed pages than axis-aligned OCR unions. The model is specifically designed for mask-level distorted-page localization. [RT-DocLayout §§3.1–3.4](https://arxiv.org/html/2606.23344#S3)
+3. **Better crops:** V3 polygons can define tighter uncertain-region crops on curved/skewed pages than axis-aligned OCR unions. The model is specifically designed for mask-level distorted-page localization. [RT-DocLayout sections 3.1 to 3.4](https://arxiv.org/html/2606.23344#S3)
 4. **Markdown structure:** deterministic assembly can treat `doc_title`, `paragraph_title`, tables, formulas, lists/content, and footnotes differently before Luna validation. Labels remain hypotheses, never verified semantics.
 
 ### What not to do
@@ -227,7 +227,7 @@ These fields derive directly from the published result contract and preserve the
 1. Does the released PP-DocLayoutV3 wheel return one-based order with null skipped labels on the exact PaddleX/Paddle versions chosen, despite the guide saying zero-based?
 2. What does the V3 `num_classes: 11` training YAML represent when official inference metadata contains 25 labels?
 3. Are PP-DocLayoutV3's current Paddle/ONNX/transformers engine options equivalent on Windows, or is Paddle inference the only supported production path?
-4. What peak VRAM and wall-clock latency does V3 exhibit at batch sizes 1–8 on the user's 8 GB GPU alongside RapidOCR's ONNX Runtime session?
+4. What peak VRAM and wall-clock latency does V3 exhibit at batch sizes 1 to 8 on the user's 8 GB GPU alongside RapidOCR's ONNX Runtime session?
 5. Do polygon/order gains remain after Luna's visual review, and do they reduce tokens enough to offset local latency?
 6. Which region classes and thresholds are calibrated for the application's actual invoices, forms, claims, and scanned PDFs?
 
@@ -235,29 +235,29 @@ These fields derive directly from the published result contract and preserve the
 
 ### User-specified sources
 
-1. [PP-DocLayoutV3 Hugging Face model repository](https://huggingface.co/PaddlePaddle/PP-DocLayoutV3) — model identity, intended non-planar-document behavior, weights, paper link.
-2. [PP-StructureV3 algorithm page](https://www.paddleocr.ai/main/en/version3.x/algorithm/PP-StructureV3/PP-StructureV3.html) — pipeline capabilities and end-to-end benchmark tables.
-3. [PaddleX 3.4 layout-detection tutorial](https://paddlepaddle.github.io/PaddleX/3.4/en/module_usage/tutorials/ocr_modules/layout_detection.html) — modern model API, results, thresholds, models, training.
-4. [Legacy PaddleOCR layout README](https://github.com/PaddlePaddle/PaddleOCR/blob/main/ppstructure/layout/README.md) — older PicoDet/PaddleDetection workflow.
-5. [Legacy installation section](https://github.com/PaddlePaddle/PaddleOCR/blob/main/ppstructure/layout/README.md#3-install) — legacy install entry point.
-6. [Legacy PaddlePaddle install subsection](https://github.com/PaddlePaddle/PaddleOCR/blob/main/ppstructure/layout/README.md#31-install-paddlepaddle) — old Paddle `>=2.3` instructions.
-7. [Legacy PaddleDetection install subsection](https://github.com/PaddlePaddle/PaddleOCR/blob/main/ppstructure/layout/README.md#32-install-paddledetection) — cloned PaddleDetection training dependency.
-8. [PP-DocLayout-L Hugging Face model repository](https://huggingface.co/PaddlePaddle/PP-DocLayout-L) — model description, example API/output, pipeline example.
+1. [PP-DocLayoutV3 Hugging Face model repository](https://huggingface.co/PaddlePaddle/PP-DocLayoutV3): model identity, intended non-planar-document behavior, weights, paper link.
+2. [PP-StructureV3 algorithm page](https://www.paddleocr.ai/main/en/version3.x/algorithm/PP-StructureV3/PP-StructureV3.html): pipeline capabilities and end-to-end benchmark tables.
+3. [PaddleX 3.4 layout-detection tutorial](https://paddlepaddle.github.io/PaddleX/3.4/en/module_usage/tutorials/ocr_modules/layout_detection.html): modern model API, results, thresholds, models, training.
+4. [Legacy PaddleOCR layout README](https://github.com/PaddlePaddle/PaddleOCR/blob/main/ppstructure/layout/README.md): older PicoDet/PaddleDetection workflow.
+5. [Legacy installation section](https://github.com/PaddlePaddle/PaddleOCR/blob/main/ppstructure/layout/README.md#3-install): legacy install entry point.
+6. [Legacy PaddlePaddle install subsection](https://github.com/PaddlePaddle/PaddleOCR/blob/main/ppstructure/layout/README.md#31-install-paddlepaddle): old Paddle `>=2.3` instructions.
+7. [Legacy PaddleDetection install subsection](https://github.com/PaddlePaddle/PaddleOCR/blob/main/ppstructure/layout/README.md#32-install-paddledetection): cloned PaddleDetection training dependency.
+8. [PP-DocLayout-L Hugging Face model repository](https://huggingface.co/PaddlePaddle/PP-DocLayout-L): model description, example API/output, pipeline example.
 
 ### Additional first-party sources
 
-9. [PP-DocLayoutV3 inference metadata](https://huggingface.co/PaddlePaddle/PP-DocLayoutV3/blob/main/inference.yml) — preprocessing, labels, architecture, backend shapes.
-10. [PP-DocLayout-L inference metadata](https://huggingface.co/PaddlePaddle/PP-DocLayout-L/blob/main/inference.yml) — preprocessing, labels, architecture, backend shapes.
-11. [RT-DocLayout technical report](https://arxiv.org/html/2606.23344) — architecture, training, benchmarks, ablations, caveats.
-12. [PaddleX 3.4 layout-analysis tutorial](https://github.com/PaddlePaddle/PaddleX/blob/release/3.4/docs/module_usage/tutorials/ocr_modules/layout_analysis.en.md) — PP-DocLayoutV3 API, output, model table, custom development.
-13. [PaddleX V3 result implementation](https://github.com/PaddlePaddle/PaddleX/blob/release/3.4/paddlex/inference/models/layout_analysis/result.py) — JSON/visualization behavior.
-14. [PaddleX V3 post-processing](https://github.com/PaddlePaddle/PaddleX/blob/release/3.4/paddlex/inference/models/layout_analysis/processors.py) — polygon extraction, ordering, skipped labels.
-15. [PaddleX V3 predictor](https://github.com/PaddlePaddle/PaddleX/blob/release/3.4/paddlex/inference/models/layout_analysis/predictor.py) — result construction and configuration.
-16. [PP-DocLayoutV3 module config](https://github.com/PaddlePaddle/PaddleX/blob/release/3.4/paddlex/configs/modules/layout_analysis/PP-DocLayoutV3.yaml) — train/evaluate/export/predict defaults.
-17. [PP-StructureV3 pipeline config](https://github.com/PaddlePaddle/PaddleX/blob/release/3.4/paddlex/configs/pipelines/PP-StructureV3.yaml) — actual submodels and default feature flags.
-18. [PaddleOCR PP-StructureV3 usage guide](https://www.paddleocr.ai/main/en/version3.x/pipeline_usage/PP-StructureV3.html) — APIs, parameters, and structured result contract.
-19. [PaddleX 3.4 installation guide](https://github.com/PaddlePaddle/PaddleX/blob/release/3.4/docs/installation/installation.en.md) — Python versions and package modes.
-20. [PaddlePaddle installation guide for PaddleX 3.4](https://github.com/PaddlePaddle/PaddleX/blob/release/3.4/docs/installation/paddlepaddle_install.en.md) — CUDA wheels, drivers, Windows notes, TensorRT.
+9. [PP-DocLayoutV3 inference metadata](https://huggingface.co/PaddlePaddle/PP-DocLayoutV3/blob/main/inference.yml): preprocessing, labels, architecture, backend shapes.
+10. [PP-DocLayout-L inference metadata](https://huggingface.co/PaddlePaddle/PP-DocLayout-L/blob/main/inference.yml): preprocessing, labels, architecture, backend shapes.
+11. [RT-DocLayout technical report](https://arxiv.org/html/2606.23344): architecture, training, benchmarks, ablations, caveats.
+12. [PaddleX 3.4 layout-analysis tutorial](https://github.com/PaddlePaddle/PaddleX/blob/release/3.4/docs/module_usage/tutorials/ocr_modules/layout_analysis.en.md): PP-DocLayoutV3 API, output, model table, custom development.
+13. [PaddleX V3 result implementation](https://github.com/PaddlePaddle/PaddleX/blob/release/3.4/paddlex/inference/models/layout_analysis/result.py): JSON/visualization behavior.
+14. [PaddleX V3 post-processing](https://github.com/PaddlePaddle/PaddleX/blob/release/3.4/paddlex/inference/models/layout_analysis/processors.py): polygon extraction, ordering, skipped labels.
+15. [PaddleX V3 predictor](https://github.com/PaddlePaddle/PaddleX/blob/release/3.4/paddlex/inference/models/layout_analysis/predictor.py): result construction and configuration.
+16. [PP-DocLayoutV3 module config](https://github.com/PaddlePaddle/PaddleX/blob/release/3.4/paddlex/configs/modules/layout_analysis/PP-DocLayoutV3.yaml): train/evaluate/export/predict defaults.
+17. [PP-StructureV3 pipeline config](https://github.com/PaddlePaddle/PaddleX/blob/release/3.4/paddlex/configs/pipelines/PP-StructureV3.yaml): actual submodels and default feature flags.
+18. [PaddleOCR PP-StructureV3 usage guide](https://www.paddleocr.ai/main/en/version3.x/pipeline_usage/PP-StructureV3.html): APIs, parameters, and structured result contract.
+19. [PaddleX 3.4 installation guide](https://github.com/PaddlePaddle/PaddleX/blob/release/3.4/docs/installation/installation.en.md): Python versions and package modes.
+20. [PaddlePaddle installation guide for PaddleX 3.4](https://github.com/PaddlePaddle/PaddleX/blob/release/3.4/docs/installation/paddlepaddle_install.en.md): CUDA wheels, drivers, Windows notes, TensorRT.
 
 ## Collection note
 

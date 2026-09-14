@@ -88,7 +88,7 @@ Suggested acceptance dashboard: completion rate; strict/canonical CER; page exac
 [^openai-eval]: OpenAI, [Evaluation best practices](https://developers.openai.com/api/docs/guides/evaluation-best-practices), accessed 2026-08-31.
 [^openai-graders]: OpenAI, [Graders](https://developers.openai.com/api/docs/guides/graders), accessed 2026-08-31.
 [^openai-vision]: OpenAI, [Images and vision](https://developers.openai.com/api/docs/guides/images-vision), accessed 2026-08-31.
-[^openai-deploy]: OpenAI, [API deployment checklist — Set image detail intentionally](https://developers.openai.com/api/docs/guides/deployment-checklist#set-image-detail-intentionally), accessed 2026-08-31.
+[^openai-deploy]: OpenAI, [API deployment checklist: Set image detail intentionally](https://developers.openai.com/api/docs/guides/deployment-checklist#set-image-detail-intentionally), accessed 2026-08-31.
 [^unicode]: Unicode Consortium, [Unicode Standard Annex #15: Unicode Normalization Forms](https://www.unicode.org/reports/tr15/), Version 17.0.0, 2025-07-30.
 [^json-schema]: JSON Schema, [JSON Schema Validation: A Vocabulary for Structural Validation of JSON, Draft 2020-12](https://json-schema.org/draft/2020-12/json-schema-validation), 2022-06-10.
 [^commonmark]: John MacFarlane et al., [CommonMark Specification 0.31.2](https://spec.commonmark.org/0.31.2/), 2024-01-28.
