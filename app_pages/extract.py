@@ -1,4 +1,12 @@
-"""Structured extraction results and field review page."""
+"""Structured extraction results and field review page.
+
+Mostly a read-only view over `st.session_state["workflow"]`; the one write
+path is `record_user_override`, which appends a human correction to the
+audit layer without touching raw OCR blocks or re-running extraction. Must
+not call `run_agent_workflow` or any refinement/OCR function directly.
+Next: `agentic_extractor.workflow` (extraction/review) and
+`agentic_extractor.capabilities` (evidence validation).
+"""
 
 import json
 

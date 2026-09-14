@@ -1,4 +1,14 @@
-"""Document-only chat over generated Parse Markdown."""
+"""Document-only chat over generated Parse Markdown.
+
+Responsible for: multi-document chat interaction grounded exclusively in
+generated Parse Markdown excerpts, presenting questions, stream responses,
+and source citations in Streamlit.
+
+Must not: send original document bytes, images, or ungrounded content to chat.
+
+Next: `agentic_extractor.document_chat` for retrieval and scoring logic, and
+`agentic_extractor.openai_refiner` for LLM completion execution.
+"""
 
 from __future__ import annotations
 
@@ -7,10 +17,10 @@ import streamlit as st
 from agentic_extractor.config import SETTINGS
 from agentic_extractor.document_chat import (
     MarkdownExcerpt,
-    ProcessedMarkdownDocument,
     recent_chat_history,
     retrieve_markdown_excerpts,
     safe_chat_text,
+    validate_processed_document,
 )
 from agentic_extractor.openai_refiner import OpenAIConfigurationError, OpenAIRefiner
 
@@ -41,11 +51,14 @@ st.caption("Answers use generated output Markdown only. Original files are never
 
 stored = st.session_state.setdefault("processed_documents", {})
 documents = {
-    document_id: ProcessedMarkdownDocument.model_validate(value)
-    for document_id, value in stored.items()
+    document_id: validate_processed_document(value) for document_id, value in stored.items()
+}
+st.session_state.processed_documents = {
+    document_id: document.model_dump(mode="json") for document_id, document in documents.items()
 }
 st.session_state.setdefault("chat_messages", [])
 st.session_state.setdefault("chat_scope", ())
+histories = st.session_state.setdefault("chat_histories", {})
 
 if not documents:
     st.info("No processed Markdown is available. Process a document on the Parse page first.")
@@ -74,8 +87,11 @@ if len(selected_ids) > 12 or any(document_id not in documents for document_id in
 
 scope = tuple(sorted(selected_ids))
 if scope != tuple(st.session_state.chat_scope):
+    previous_scope = tuple(st.session_state.chat_scope)
+    if previous_scope:
+        histories[previous_scope] = list(st.session_state.chat_messages)
     st.session_state.chat_scope = scope
-    st.session_state.chat_messages = []
+    st.session_state.chat_messages = list(histories.get(scope, []))
 
 selected_documents = [documents[document_id] for document_id in selected_ids]
 with st.container(border=True):
@@ -121,6 +137,7 @@ question = st.chat_input(
 if question:
     prior_messages = list(st.session_state.chat_messages)
     st.session_state.chat_messages.append({"role": "user", "content": question})
+    histories[scope] = list(st.session_state.chat_messages)
     with st.chat_message("user"):
         st.markdown(question)
 
@@ -152,6 +169,7 @@ if question:
                 "usage": usage_value,
             }
         )
+        histories[scope] = list(st.session_state.chat_messages)
         st.session_state.setdefault("usage_history", []).append(
             {"mode": "Document chat", "usage": usage_value, "rapidocr_seconds": 0}
         )

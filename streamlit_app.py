@@ -1,9 +1,22 @@
-"""Streamlit entry point: controls left, source and artifacts center."""
+"""Streamlit entry point: controls left, source and artifacts center.
+
+Responsible for: the primary interactive Parse UI in Streamlit (document
+upload, page range selection, ProcessingMode toggle, live execution of
+`run_agent_workflow`, Markdown/JSON/manifest inspection, and human checkbox
+overrides).
+
+Must not: bypass the workflow state machine, execute single-engine fallback,
+or persist state outside `st.session_state` and process-memory caches.
+
+Next: `app_pages/html.py` for full coordinate layout visualization, or
+`app_pages/chat.py` for document question-answering.
+"""
 
 from __future__ import annotations
 
 import hashlib
 import json
+import time
 import uuid
 from typing import Literal
 
@@ -11,7 +24,6 @@ import streamlit as st
 
 from agentic_extractor.artifacts import (
     build_local_artifacts,
-    build_local_bundle,
     markdown_for_display,
 )
 from agentic_extractor.config import SETTINGS
@@ -22,6 +34,10 @@ from agentic_extractor.ingest import (
     IngestError,
     load_document,
     validate_page_range,
+)
+from agentic_extractor.layout import (
+    create_pp_doclayout_engine,
+    pp_doclayout_runtime_installed,
 )
 from agentic_extractor.models import (
     Capability,
@@ -42,7 +58,8 @@ from agentic_extractor.schema_input import (
     markdown_to_schema,
     parse_json_schema,
 )
-from agentic_extractor.ui_state import AppState
+from agentic_extractor.timing import stage_timing_summary
+from agentic_extractor.ui_state import AppState, output_file_name
 from agentic_extractor.workflow import (
     WorkflowState,
     record_checkbox_override,
@@ -60,6 +77,11 @@ def get_ocr_resource():
     return create_rapidocr_engine()
 
 
+@st.cache_resource(show_spinner="Loading PP-DocLayoutV3…")
+def get_layout_resource():
+    return create_pp_doclayout_engine()
+
+
 @st.cache_resource(show_spinner=False)
 def get_openai_refiner() -> OpenAIRefiner:
     return OpenAIRefiner()
@@ -69,10 +91,6 @@ def set_state(state: AppState) -> None:
     st.session_state.app_state = state
 
 
-def reset() -> None:
-    st.session_state.clear()
-
-
 def remember_processed_markdown(result, status: str) -> None:
     """Upsert the current result as a Markdown-only session chat source."""
     document_id = st.session_state.get("current_processed_document_id")
@@ -80,15 +98,54 @@ def remember_processed_markdown(result, status: str) -> None:
         document_id = uuid.uuid4().hex
         st.session_state.current_processed_document_id = document_id
     documents = dict(st.session_state.get("processed_documents", {}))
+    artifacts = st.session_state.get("artifacts")
+    public_markdown = (
+        artifacts.markdown.decode("utf-8") if artifacts is not None else result.markdown
+    )
     documents[document_id] = ProcessedMarkdownDocument(
         document_id=document_id,
         display_name=str(result.document_metadata.get("file_name") or "Processed document"),
-        markdown=result.markdown,
+        markdown=public_markdown,
         selected_pages=result.selected_pages,
         processing_status=status,
         failed_pages=result.failed_pages,
-    )
+    ).model_dump(mode="json")
     st.session_state.processed_documents = documents
+
+
+def prepare_lazy_download(
+    container,
+    label: str,
+    artifacts,
+    artifact_name: str,
+    file_name: str,
+    mime_type: str,
+) -> None:
+    """Generate a heavy artifact only after an explicit user request."""
+    metadata = getattr(artifacts, "artifact_metadata", None)
+    if not callable(metadata):
+        legacy_attribute = {
+            "annotated.pdf": "annotated_pdf",
+            "document.html": "html",
+        }.get(artifact_name)
+        legacy_data = getattr(artifacts, legacy_attribute, None) if legacy_attribute else None
+        if legacy_data is not None:
+            container.download_button(label, legacy_data, file_name, mime_type)
+        return
+    if metadata(artifact_name)["generated"]:
+        container.download_button(
+            label,
+            artifacts.get(artifact_name),
+            file_name,
+            mime_type,
+            icon=":material/download:",
+        )
+    elif container.button(
+        f"Prepare {label}", key=f"prepare_{artifact_name}", icon=":material/build:"
+    ):
+        with st.spinner(f"Generating {label}…"):
+            artifacts.get(artifact_name)
+        st.rerun()
 
 
 def _money(value: float | None, status: str) -> str:
@@ -162,9 +219,13 @@ st.session_state.setdefault("workflow", None)
 st.session_state.setdefault("upload_identity", None)
 st.session_state.setdefault("processed_documents", {})
 st.session_state.setdefault("current_processed_document_id", None)
+st.session_state.setdefault("source_upload", None)
+st.session_state.setdefault("guided_schema_rows", None)
+st.session_state.setdefault("json_schema_upload_text", "")
+st.session_state.setdefault("markdown_schema_upload_text", "")
 
 st.title("Agentic document extraction")
-st.caption("Local RapidOCR followed by required GPT-5.6-luna visual and semantic refinement")
+st.caption("Local RapidOCR and PP-DocLayoutV3 followed by required GPT-5.6-luna refinement")
 
 document: IngestedDocument | None = None
 validation_error: str | None = None
@@ -177,11 +238,13 @@ with st.sidebar:
     uploaded = st.file_uploader(
         "Source document",
         type=["pdf", "png", "jpg", "jpeg", "tif", "tiff"],
+        key="source_document_uploader",
         max_upload_size=50,
         help="PDF, PNG, JPEG, or TIFF; maximum 50 MiB.",
     )
     if uploaded is not None:
         upload_data = uploaded.getvalue()
+        st.session_state.source_upload = (uploaded.name, upload_data)
         upload_identity = (uploaded.name, hashlib.sha256(upload_data).digest())
         upload_changed = upload_identity != st.session_state.upload_identity
         if upload_changed:
@@ -199,44 +262,40 @@ with st.sidebar:
         except IngestError as exc:
             validation_error = str(exc)
             set_state(AppState.FAILED)
-    elif st.session_state.upload_identity is not None:
-        st.session_state.upload_identity = None
-        st.session_state["result"] = None
-        st.session_state["workflow"] = None
-        st.session_state["original"] = None
-        st.session_state.pop("artifacts", None)
-        st.session_state.current_processed_document_id = None
-        set_state(AppState.IDLE)
+    elif st.session_state.source_upload is not None:
+        saved_name, saved_data = st.session_state.source_upload
+        try:
+            document = inspect_upload(saved_name, saved_data)
+        except IngestError as exc:
+            validation_error = str(exc)
+            set_state(AppState.FAILED)
 
     mode_value = st.segmented_control(
         "Extraction mode",
         [mode.value for mode in ProcessingMode],
         default=ProcessingMode.BALANCED.value,
         key="mode",
+        persist_state="session",
     )
     mode = ProcessingMode(mode_value)
-    st.subheader("Engine status")
     openai_key_present = SETTINGS.openai_configured
-    if openai_key_present:
-        st.success("OpenAI API configured · gpt-5.6-luna")
-    else:
-        st.error(
-            "OpenAI is not configured. Add OPENAI_API_KEY to the launcher environment, "
-            "restart the app, and retry."
-        )
     rapidocr_version = rapidocr_package_version()
-    if rapidocr_version:
-        st.success(f"RapidOCR installed · {rapidocr_version}")
-    else:
-        st.error(
-            "RapidOCR is unavailable. Run 'uv sync --all-groups' and verify ONNX Runtime setup."
-        )
+    layout_installed = pp_doclayout_runtime_installed()
     enable_preprocessing = st.checkbox(
         "Apply only measurably improved local preprocessing",
+        key="enable_preprocessing",
+        persist_state="session",
         help=(
             "Currently retains same-geometry contrast normalization only when its "
             "diagnostic score improves."
         ),
+    )
+    include_atomic_grounding = st.checkbox(
+        "Atomic grounding",
+        value=True,
+        key="include_atomic_grounding",
+        persist_state="session",
+        help="Include atomic grounding parts array in JSON response.",
     )
 
     st.caption(":material/check_circle: Parse · always enabled")
@@ -246,12 +305,19 @@ with st.sidebar:
         [item.value for item in optional_capabilities],
         selection_mode="multi",
         default=[],
+        key="optional_workflows",
+        persist_state="session",
     )
     capabilities = {Capability(value) for value in capability_values} | {Capability.PARSE}
 
     classes: list[str] = []
     if Capability.CLASSIFY in capabilities:
-        class_text = st.text_input("Allowed classes", placeholder="invoice, receipt, contract")
+        class_text = st.text_input(
+            "Allowed classes",
+            placeholder="invoice, receipt, contract",
+            key="allowed_classes",
+            persist_state="session",
+        )
         classes = [item.strip() for item in class_text.split(",") if item.strip()]
 
     split_text = ""
@@ -261,21 +327,36 @@ with st.sidebar:
             "Override split starts",
             placeholder="Example: 4, 9",
             help="Each number starts a new document and retains its original source page number.",
+            key="split_starts",
+            persist_state="session",
         )
         split_override_reason = st.text_input(
             "Split override reason",
             placeholder="Why these boundaries are authoritative",
             help="Required when override split starts are supplied; stored in the audit manifest.",
+            key="split_override_reason",
+            persist_state="session",
         )
 
     if Capability.EXTRACT in capabilities:
-        schema_version = st.text_input("Schema version", value="1.0", max_chars=64)
+        schema_version = st.text_input(
+            "Schema version",
+            value="1.0",
+            max_chars=64,
+            key="schema_version",
+            persist_state="session",
+        )
         schema_mode = st.segmented_control(
-            "Field schema", ["Guided", "JSON Schema", "Markdown"], default="Guided"
+            "Field schema",
+            ["Guided", "JSON Schema", "Markdown"],
+            default="Guided",
+            key="schema_mode",
+            persist_state="session",
         )
         if schema_mode == "Guided":
-            rows = st.data_editor(
-                [
+            initial_rows = st.session_state.guided_schema_rows
+            if initial_rows is None:
+                initial_rows = [
                     {
                         "name": "",
                         "type": "string",
@@ -286,15 +367,19 @@ with st.sidebar:
                         "minimum": None,
                         "maximum": None,
                     }
-                ],
+                ]
+            rows = st.data_editor(
+                initial_rows,
                 num_rows="dynamic",
                 width="stretch",
+                key="guided_schema_editor",
                 column_config={
                     "type": st.column_config.SelectboxColumn(
                         options=["string", "number", "integer", "boolean"]
                     )
                 },
             )
+            st.session_state.guided_schema_rows = rows
             try:
                 schema = (
                     builder_to_schema(rows)
@@ -306,7 +391,11 @@ with st.sidebar:
                 st.error(f"Invalid guided schema: {exc}")
         elif schema_mode == "JSON Schema":
             schema_source = st.segmented_control(
-                "JSON schema input", ["Paste", "Upload"], default="Paste"
+                "JSON schema input",
+                ["Paste", "Upload"],
+                default="Paste",
+                key="json_schema_source",
+                persist_state="session",
             )
             raw_schema = ""
             if schema_source == "Upload":
@@ -316,11 +405,18 @@ with st.sidebar:
                 if schema_file is not None:
                     try:
                         raw_schema = schema_file.getvalue().decode("utf-8-sig")
+                        st.session_state.json_schema_upload_text = raw_schema
                     except UnicodeDecodeError:
                         st.error("Invalid JSON Schema: the uploaded file must be UTF-8 text.")
+                else:
+                    raw_schema = st.session_state.json_schema_upload_text
             else:
                 raw_schema = st.text_area(
-                    "JSON Schema", height=180, placeholder='{"type":"object","properties":{}}'
+                    "JSON Schema",
+                    height=180,
+                    placeholder='{"type":"object","properties":{}}',
+                    key="json_schema_text",
+                    persist_state="session",
                 )
             try:
                 schema = parse_json_schema(raw_schema) if raw_schema.strip() else None
@@ -328,7 +424,11 @@ with st.sidebar:
                 st.error(f"Invalid JSON Schema: {exc}")
         else:
             schema_source = st.segmented_control(
-                "Markdown schema input", ["Paste", "Upload"], default="Paste"
+                "Markdown schema input",
+                ["Paste", "Upload"],
+                default="Paste",
+                key="markdown_schema_source",
+                persist_state="session",
             )
             markdown_schema = ""
             if schema_source == "Upload":
@@ -338,8 +438,11 @@ with st.sidebar:
                 if schema_file is not None:
                     try:
                         markdown_schema = schema_file.getvalue().decode("utf-8-sig")
+                        st.session_state.markdown_schema_upload_text = markdown_schema
                     except UnicodeDecodeError:
                         st.error("Invalid Markdown schema: the uploaded file must be UTF-8 text.")
+                else:
+                    markdown_schema = st.session_state.markdown_schema_upload_text
             else:
                 markdown_schema = st.text_area(
                     "Markdown field definitions",
@@ -349,6 +452,8 @@ with st.sidebar:
                         "## invoice_date\nInvoice issue date in YYYY-MM-DD format.\n\n"
                         "## total_amount\nFinal payable amount, including tax."
                     ),
+                    key="markdown_schema_text",
+                    persist_state="session",
                 )
             try:
                 schema = markdown_to_schema(markdown_schema) if markdown_schema.strip() else None
@@ -358,6 +463,8 @@ with st.sidebar:
             "Cross-field rules (JSON)",
             value="[]",
             help='Supported operations: "equals", "sum_equals", and "less_than_or_equal".',
+            key="cross_field_rules",
+            persist_state="session",
         )
         try:
             parsed_rules = json.loads(rules_text)
@@ -373,8 +480,22 @@ with st.sidebar:
     start_page = end_page = 1
     if document and document.page_count > 1:
         st.subheader("Inclusive page range")
-        start_page = st.number_input("Start page", 1, document.page_count, 1)
-        end_page = st.number_input("End page", start_page, document.page_count, document.page_count)
+        start_page = st.number_input(
+            "Start page",
+            1,
+            document.page_count,
+            1,
+            key="start_page",
+            persist_state="session",
+        )
+        end_page = st.number_input(
+            "End page",
+            start_page,
+            document.page_count,
+            document.page_count,
+            key="end_page",
+            persist_state="session",
+        )
     elif document:
         st.caption("Single-page source · page range fixed to 1")
 
@@ -388,6 +509,7 @@ with st.sidebar:
         and not validation_error
         and openai_key_present
         and rapidocr_version
+        and layout_installed
         and (Capability.CLASSIFY not in capabilities or classes)
         and (Capability.EXTRACT not in capabilities or schema)
         and (not split_boundaries or split_override_reason.strip())
@@ -399,7 +521,6 @@ with st.sidebar:
         width="stretch",
         disabled=not can_process,
     )
-    st.button("Reset", icon=":material/restart_alt:", width="stretch", on_click=reset)
 
 state = st.session_state.app_state
 state_color: Literal["green", "orange", "red", "blue", "gray"]
@@ -428,13 +549,14 @@ else:
     metadata.metric("Type", document.mime_type)
     metadata.metric("Size", f"{document.byte_size / 1024:,.1f} KiB")
     metadata.metric("Pages", document.page_count)
-    with st.container(border=True):
-        st.subheader(":material/preview: Source preview")
-        st.image(
-            document.pages[int(start_page) - 1].image,
-            caption=f"Page {int(start_page)} of {document.page_count}",
-            width="stretch",
-        )
+    if st.session_state.result is None:
+        with st.container(border=True):
+            st.subheader(":material/preview: Source preview")
+            st.image(
+                document.pages[int(start_page) - 1].image,
+                caption=f"Page {int(start_page)} of {document.page_count}",
+                width="stretch",
+            )
     with st.expander(":material/image_search: Image-quality preflight"):
         for page in document.pages[int(start_page) - 1 : int(end_page)]:
             diagnostic = analyze_page(
@@ -448,7 +570,8 @@ else:
             st.json(diagnostic.model_dump(mode="json"))
         st.caption(
             "No RapidOCR segmentation API is claimed. This build uses grounded layout "
-            "reconstruction and one-page bounded OCR calls. Incorrect regions usually indicate "
+            "reconstruction and bounded, dedicated-engine page workers. Incorrect regions "
+            "usually indicate "
             "layout/detection issues; correct regions with incorrect text usually indicate "
             "OCR or source-image quality issues."
         )
@@ -462,8 +585,12 @@ if process_clicked and document:
         with st.status("Processing selected pages…", expanded=True) as status:
             progress.progress(15, text="15% — Validating OpenAI configuration")
             st.write("Validating OpenAI configuration without sending document content")
+            configuration_started = time.perf_counter()
             cloud_refiner = get_openai_refiner()
             cloud_refiner.validate_configuration()
+            initialization_timings = {
+                "configuration_seconds": time.perf_counter() - configuration_started
+            }
             progress.progress(25, text="25% — Preparing the extraction request")
             request = DocumentRequest(
                 file_name=document.file_name,
@@ -478,15 +605,32 @@ if process_clicked and document:
                 business_rules=business_rules,
                 enable_preprocessing=enable_preprocessing,
             )
-            st.write("Running RapidOCR first, followed by required GPT-5.6-luna refinement")
-            progress.progress(35, text="35% — Running RapidOCR and GPT refinement")
+            st.write(
+                "Running RapidOCR, PP-DocLayoutV3 reading order and table structure, "
+                "then required GPT-5.6-luna refinement"
+            )
+            progress.progress(35, text="35% — Running OCR, reading order, and table structure")
+            rapidocr_initialization_started = time.perf_counter()
+            ocr_resource = get_ocr_resource()
+            initialization_timings["rapidocr_initialization_seconds"] = (
+                time.perf_counter() - rapidocr_initialization_started
+            )
+            layout_initialization_started = time.perf_counter()
+            layout_resource = get_layout_resource()
+            initialization_timings["layout_initialization_seconds"] = (
+                time.perf_counter() - layout_initialization_started
+            )
             result, workflow = run_agent_workflow(
                 request,
-                ocr_resource=get_ocr_resource(),
+                ocr_resource=ocr_resource,
+                layout_resource=layout_resource,
                 refiner=cloud_refiner,
+                initialization_timings=initialization_timings,
             )
-            progress.progress(90, text="90% — Building local artifacts")
-            artifacts = build_local_artifacts(result)
+            progress.progress(90, text="90% — Finalizing canonical result")
+            artifacts = build_local_artifacts(
+                result, include_atomic_grounding=include_atomic_grounding
+            )
             final_state = (
                 AppState.PARTIAL_FAILURE
                 if result.failed_pages
@@ -526,29 +670,52 @@ if process_clicked and document:
         st.error(f"Processing failed: {type(exc).__name__}: {exc}")
 
 if result := st.session_state.result:
+    source_file_name = getattr(result, "document_metadata", {}).get("file_name", "document")
+    public_markdown = st.session_state.artifacts.markdown.decode("utf-8")
     st.subheader(":material/article: Results")
-    for warning in result.warnings:
-        st.warning(warning)
-    rendered_tab, raw_tab, pdf_tab, html_tab, blocks_tab, artifacts_tab, usage_tab = st.tabs(
+    source_tab, rendered_tab, raw_tab, pdf_tab, blocks_tab, artifacts_tab, usage_tab = st.tabs(
         [
+            "Source preview",
             "Rendered Markdown",
             "Raw Markdown",
             "Annotated PDF",
-            "HTML",
             "Grounded blocks",
             "Artifact metadata",
             "Usage",
-        ]
+        ],
+        key="result_view",
+        on_change="rerun",
     )
+    with source_tab:
+        if document is not None:
+            st.image(
+                document.pages[int(start_page) - 1].image,
+                caption=f"Page {int(start_page)} of {document.page_count}",
+                width="stretch",
+            )
+        elif result.pages:
+            source_page = result.pages[0]
+            st.image(
+                source_page.original_image_bytes or source_page.image_bytes,
+                caption=f"Source page {source_page.page}",
+                width="stretch",
+            )
+        else:
+            st.info("Source preview is unavailable for this retained result.")
     with rendered_tab:
-        st.markdown(markdown_for_display(result.markdown) or "_No text was extracted._")
+        st.markdown(markdown_for_display(public_markdown) or "_No text was extracted._")
     with raw_tab:
-        st.code(result.markdown, language="markdown", wrap_lines=True)
-    with pdf_tab:
-        st.pdf(st.session_state.artifacts.annotated_pdf, height=720)
-    with html_tab:
-        st.caption("Refined Markdown rendered as HTML with page and grounding context.")
-        st.iframe(st.session_state.artifacts.html.decode("utf-8"), height=760)
+        st.code(public_markdown, language="markdown", wrap_lines=True)
+    if pdf_tab.open:
+        with pdf_tab:
+            st.pdf(st.session_state.artifacts.annotated_pdf, height=720)
+            st.download_button(
+                "Download annotated PDF",
+                st.session_state.artifacts.annotated_pdf,
+                output_file_name(source_file_name, ".annotated.pdf"),
+                "application/pdf",
+                icon=":material/download:",
+            )
     with blocks_tab:
         blocks = [block.model_dump() for page in result.pages for block in page.blocks]
         st.dataframe(blocks, width="stretch")
@@ -565,15 +732,27 @@ if result := st.session_state.result:
                     "model_metadata": result.engine.model_metadata,
                 },
                 "gpt": result.usage.model_dump(mode="json"),
+                "visual_routing": getattr(result, "visual_routing", {}),
             }
         )
     downloads = st.container(horizontal=True)
-    downloads.download_button("Markdown", st.session_state.artifacts.markdown, "document.md")
     downloads.download_button(
-        "Structured Parse", st.session_state.artifacts.parse_result, "parse-result.json"
+        "Markdown",
+        st.session_state.artifacts.markdown,
+        output_file_name(source_file_name, ".md"),
     )
     downloads.download_button(
-        "Annotated PDF", st.session_state.artifacts.annotated_pdf, "annotated.pdf"
+        "Structured Parse",
+        st.session_state.artifacts.parse_result,
+        output_file_name(source_file_name, ".parse.json"),
+    )
+    prepare_lazy_download(
+        downloads,
+        "HTML",
+        st.session_state.artifacts,
+        "document.html",
+        output_file_name(source_file_name, ".html"),
+        "text/html",
     )
 
 if workflow := st.session_state.workflow:
@@ -637,6 +816,18 @@ if workflow := st.session_state.workflow:
             st.json(
                 {
                     "label": selected_checkbox.label,
+                    "local_vision": {
+                        "engine": "OpenCV",
+                        "candidate_id": selected_checkbox.local_vision_id,
+                        "state": selected_checkbox.local_vision_state,
+                        "heuristic_score": selected_checkbox.local_vision_score,
+                        "bbox": selected_checkbox.local_vision_bbox,
+                    },
+                    "RapidOCR_grounding": {
+                        "source": selected_checkbox.source_text,
+                        "score": selected_checkbox.ocr_label_score,
+                        "unique": selected_checkbox.ocr_grounding_unique,
+                    },
                     "discovery": {
                         "state": selected_checkbox.discovery_state,
                         "confidence": selected_checkbox.discovery_confidence,
@@ -646,8 +837,8 @@ if workflow := st.session_state.workflow:
                         "confidence": selected_checkbox.verification_confidence,
                         "reason": selected_checkbox.verification_reason,
                     },
+                    "agreement": selected_checkbox.agreement,
                     "review_reason": selected_checkbox.review_reason,
-                    "RapidOCR_source": selected_checkbox.source_text,
                 }
             )
             with st.form("checkbox_override"):
@@ -675,16 +866,18 @@ if workflow := st.session_state.workflow:
                     result.checkbox_corrections = st.session_state.workflow.checkbox_corrections
                     result.workflow_manifest = st.session_state.workflow.manifest()
                     result.markdown = render_result_markdown(result)
-                    st.session_state.artifacts = build_local_artifacts(result)
+                    st.session_state.artifacts = build_local_artifacts(
+                        result, include_atomic_grounding=include_atomic_grounding
+                    )
                     remember_processed_markdown(result, st.session_state.app_state.value)
                     st.rerun()
-    downloads.download_button("HTML", st.session_state.artifacts.html, "document.html")
-    downloads.download_button(
+    prepare_lazy_download(
+        downloads,
         "ZIP package",
-        build_local_bundle(result),
-        "agentic-extraction.zip",
+        st.session_state.artifacts,
+        "bundle.zip",
+        output_file_name(source_file_name, ".zip"),
         "application/zip",
-        icon=":material/download:",
     )
 
 st.subheader(":material/payments: Usage & Cost")
@@ -731,11 +924,51 @@ else:
     cost_row.metric("Output cost", _money(usage.output_cost_usd, usage.cost_status))
     cost_row.metric("Total cost", _money(usage.total_cost_usd, usage.cost_status))
     cost_row.metric("RapidOCR API cost", "$0.00")
+    cost_row.metric("PP-DocLayoutV3 API cost", "$0.00")
+    cost_row.metric("Table structure API cost", "$0.00")
     st.caption("Model: gpt-5.6-luna · reasoning effort: medium")
     st.caption(
         f"RapidOCR processing: {current.timings.get('ocr_seconds', 0):.3f}s · "
         f"session total: {session_ocr_seconds:.3f}s · hardware cost: unavailable"
     )
+    layout_engine = getattr(current, "layout_engine", None)
+    if layout_engine is not None:
+        st.caption(
+            f"PP-DocLayoutV3 processing: {current.timings.get('layout_seconds', 0):.3f}s · "
+            f"device: {layout_engine.device} · local API cost: $0.00"
+        )
+        st.caption(
+            f"Table structure processing: "
+            f"{current.timings.get('table_structure_seconds', 0):.3f}s · "
+            "PP-LCNet + matching SLAN model · local API cost: $0.00"
+        )
+    ocr_parallelism = getattr(current, "adaptive_processing", {})
+    render_cache = ocr_parallelism.get("render_cache", {})
+    st.caption(
+        f"RapidOCR workers: {ocr_parallelism.get('actual_workers', 1)} · "
+        f"CPU threads per worker: "
+        f"{ocr_parallelism.get('cpu_threads_per_worker') or 'runtime default'} · "
+        f"concurrency ratio: {current.timings.get('ocr_concurrency_ratio', 0):.2f}x"
+    )
+    st.caption(
+        f"Local cache — rendered pages: {render_cache.get('hits', 0)} hit / "
+        f"{render_cache.get('misses', 0)} miss · OCR: "
+        f"{ocr_parallelism.get('ocr_cache_hits', 0)} hit / "
+        f"{ocr_parallelism.get('ocr_cache_misses', 0)} miss · avoided OCR time: "
+        f"{ocr_parallelism.get('ocr_cached_seconds_avoided', 0):.3f}s"
+    )
+    timing_analysis = stage_timing_summary(current.timings)
+    bottleneck = timing_analysis["bottleneck"]
+    if bottleneck:
+        st.markdown("**Per-stage timing**")
+        timing_row = st.container(horizontal=True, border=True)
+        timing_row.metric("Slowest stage", bottleneck["stage"])
+        timing_row.metric("Stage time", f"{bottleneck['seconds']:.3f}s")
+        timing_row.metric("Measured share", f"{bottleneck['share_percent']:.1f}%")
+        timing_row.metric(
+            "Pipeline total", f"{float(current.timings.get('total_seconds', 0)):.3f}s"
+        )
+        st.dataframe(timing_analysis["stages"], width="stretch", hide_index=True)
     if usage.calls:
         st.markdown("**Per-call usage**")
         st.dataframe(_call_rows(usage.calls), width="stretch", hide_index=True)
