@@ -1,4 +1,13 @@
-"""Portable ZIP export for complete and diagnostic results."""
+"""Portable ZIP export for complete and diagnostic results.
+
+Responsible for: packaging extraction outputs (`document.md`, `result.json`,
+`blocks.jsonl`, `metadata.json`, `extraction.json`) and physical split PDF
+files into a compressed in-memory ZIP archive.
+
+Must not: mutate `DocumentResult` or perform OCR, layout, or model inference.
+
+Next: `artifacts.py`, which builds the primary `bundle.zip` manifest package.
+"""
 
 from __future__ import annotations
 
@@ -26,6 +35,8 @@ def build_result_zip(result: DocumentResult, original_pdf: bytes | None = None) 
             reader = PdfReader(io.BytesIO(original_pdf))
             for index, split in enumerate(result.splits, 1):
                 writer = PdfWriter()
+                # `split.page_start` and `split.page_end` are 1-based inclusive page numbers.
+                # Convert to 0-based half-open range for pypdf page indexing.
                 for page_index in range(split.page_start - 1, split.page_end):
                     writer.add_page(reader.pages[page_index])
                 output = io.BytesIO()

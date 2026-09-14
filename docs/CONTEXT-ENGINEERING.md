@@ -9,9 +9,10 @@ evidence. Accuracy and auditability take priority over token reduction.
 ## Runtime context contract
 
 RapidOCR remains the source of local text, geometry, confidence, and initial layout. Each Parse
-request sends every selected page image to GPT-5.6-luna at high detail. Balanced mode uses compact
-OCR rows by default and full rows for routed uncertainty or complexity; High Accuracy uses full
-rows for every selected page.
+request sends a low-detail overview of every selected page to GPT-5.6-luna unless a page-wide
+high-detail region replaces that overview. Other locally planned uncertainty regions are attached
+at high detail. Balanced uses compact OCR rows by default and full rows for routed uncertainty or
+complexity; High Accuracy uses full rows for every selected page.
 
 Block columns are declared once per page and values are serialized as deterministic JSON rows.
 Both compact and full rows retain block ID, type, text, exact confidence, normalized bounding box,
@@ -32,9 +33,12 @@ Reusable instructions and prompt templates live in versioned Markdown prompt res
 structured-output constraints also live in Pydantic response-schema field descriptions in
 `openai_refiner.py`.
 
-`cloud_batch_characters` limits rendered evidence characters, not estimated tokens. Pages remain in
-source order. A page that exceeds the limit is isolated in one request and is never truncated.
-Image tokens and provider tokenization are not inferred from character counts.
+Balanced pages needing only compact evidence are collected in source order and greedily packed
+under `cloud_batch_characters`, even when full-review pages occur between them. Only full-context
+pages remain single-page requests; compact pages with localized high-resolution crops may stay in
+packed batches. A compact page that exceeds the rendered evidence-character limit is isolated and
+never truncated. Canonical Markdown is rebuilt in source page order after all grounded proposals
+are validated. Image tokens and provider tokenization are not inferred from character counts.
 
 ## Telemetry
 
@@ -49,6 +53,11 @@ Every usage call may include a `context` object:
 | `block_count` | Evidence block or checkbox-candidate count; for document chat, retrieved excerpt count |
 | `compact_pages` | Pages represented with compact OCR rows |
 | `full_context_pages` | Pages represented with full OCR/layout rows |
+| `batch_kind` | `compact` for a packed compact-evidence request or `full` for an isolated full-review page |
+| `batch_index` / `batch_count` | One-based request position and total primary refinement requests |
+| `overview_pages` | Pages supplied as low-detail visual overviews |
+| `high_resolution_regions` | Grounded high-detail crops, reasons, bounds, and source IDs |
+| `high_resolution_region_count` | Number of high-detail crops in the call |
 
 The export manifest records usage calls completed before artifact generation. Document-chat calls
 happen afterward, remain in session usage history, and are not retroactively added to an existing

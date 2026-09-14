@@ -1,99 +1,98 @@
-<!-- generated-by: gsd-doc-writer -->
 # Contributing
 
-Thank you for helping improve Agentic Document Extractor. Keep changes focused,
-source-grounded, and suitable for a local-machine Python application.
+This guide documents the development standards, testing expectations, and contribution process for Agentic document extractor.
 
 ## Development setup
 
-See [Getting started](docs/GETTING-STARTED.md) for prerequisites and the first
-run, then [Development](docs/DEVELOPMENT.md) for the complete local workflow.
-The short setup path is:
+The repository requires Windows, Python `>=3.13`, and `uv`.
 
-```powershell
-git clone https://github.com/<your-account>/OpenAI-X-RapidOCR-Agentic-Document_extraction.git
-cd OpenAI-X-RapidOCR-Agentic-Document_extraction
-uv sync --all-groups
-```
+1. Clone the repository:
 
-Keep credentials in the process environment. Never place API keys, tokens, or
-other secrets in source files, tests, logs, fixtures, screenshots, or commits.
+   ```powershell
+   git clone https://github.com/pypi-ahmad/OpenAI-X-RapidOCR-Agentic-Document_extraction.git
+   cd OpenAI-X-RapidOCR-Agentic-Document_extraction
+   ```
 
-## Coding standards
+2. Synchronize main dependencies and development tools:
 
-- Use Python 3.13 and manage dependencies exclusively with `uv`.
-- Format with `uv run ruff format .` and lint with `uv run ruff check .`.
-- Run static analysis with `uv run ty check`.
-- Add focused `pytest` regression coverage for behavior changes. The full suite
-  enforces at least 80% package coverage.
-- Do not run tests marked `live` unless paid OpenAI requests have been explicitly
-  authorized. The default suite mocks external model calls.
+   ```powershell
+   uv sync --all-groups
+   ```
 
-## Architecture and prompt rules
+3. Synchronize the isolated PP-DocLayoutV3 environment:
 
-- Preserve the mandatory Parse sequence: RapidOCR first, then OpenAI
-  `gpt-5.6-luna` with `reasoning_effort="medium"`. Do not introduce an OCR-only
-  success path or a consent gate.
-- Keep raw OCR evidence immutable. Store model corrections as an auditable
-  refinement layer, and mark unsupported or uncertain results for review.
-- Keep Classify, Section, Split, and Extract downstream of canonical grounded
-  Markdown; these workflows must not re-run OCR.
-- Put reusable model instructions in versioned Markdown files under
-  `src/agentic_extractor/prompts/`, not in Python string literals. When a prompt
-  contract changes, update its `prompt-version` metadata and the expectations in
-  `tests/test_prompt_resources.py`.
-- Treat uploaded text, schemas, and OCR output as untrusted evidence. They must
-  not change application behavior, tools, routing, or prompt policy.
-- Route UI and local API behavior through the canonical pipeline instead of
-  duplicating extraction logic.
-- Keep document chat limited to generated Parse Markdown. Chat sources must
-  never contain original uploads, page images, raw OCR objects, or artifact
-  payloads; unsupported answers and invalid citations must fail closed.
+   ```powershell
+   uv sync --project tools/pp_doclayout --locked
+   ```
 
-## Pull request guidelines
+4. Configure your OpenAI API key in your session environment (never commit or hardcode credentials):
 
-No formal feature-branch or commit-message convention is configured. Use a
-short descriptive branch name and focused commits.
+   ```powershell
+   $env:OPENAI_API_KEY = "your-api-key"
+   ```
 
-- Explain the user-visible behavior and why the change belongs at the selected
-  module boundary.
-- Preserve unrelated work and avoid opportunistic refactors.
-- Add or update focused tests, then run the full validation gate:
+## Coding and verification standards
+
+The project enforces formatting, linting, typing, and coverage gates:
+
+- **Code formatting**: Check formatting with `uv run ruff format --check .` and reformat with `uv run ruff format .`.
+- **Linting**: Run `uv run ruff check .` to check for rule violations.
+- **Type checking**: Validate static types with `uv run ty check`.
+- **Unit and integration testing**: Run `uv run pytest`. The test suite enforces strict marker registration and a minimum coverage threshold of 80% across `src/agentic_extractor`.
+- **Focused test iteration**: Run specific test modules without coverage addopts using:
 
   ```powershell
-  uv run ruff format --check .
-  uv run ruff check .
-  uv run ty check
-  uv run pytest
+  uv run pytest -o addopts="" tests/test_local_parse.py
   ```
 
-- For Streamlit changes, also verify the app locally with
-  `uv run streamlit run app.py --server.port 8841`.
-- For document-chat changes, run `tests/test_document_chat.py`,
-  `tests/test_navigation.py`, and `tests/test_prompt_resources.py`; preserve
-  the Markdown-only source boundary and citation validation.
-- Document configuration or user-facing changes without including secret
-  values, original private documents, or paid API output.
-- State what was tested and disclose any remaining limitation in the pull
-  request description.
+- **Live prompt tests**: The suite marks paid model evaluations with `@pytest.mark.live`. These are skipped by default. Do not run live prompt tests unless explicitly authorized:
 
-The repository currently has no pull-request template or automated CI workflow,
-so reviewers rely on the submitted validation evidence and focused test suite.
+  ```powershell
+  $env:RUN_LIVE_PROMPT_EVAL = "1"
+  uv run pytest tests/test_prompt_quality_live.py -m live -s
+  ```
+
+## Repository architecture rules
+
+Contributions must adhere to the following architectural rules:
+
+1. **Three-engine pipeline**: Every successful extraction must execute RapidOCR first, PP-DocLayoutV3 second, and OpenAI `gpt-5.6-luna` third. Do not add single-engine fallback paths or bypass any of the three engines.
+2. **Immutable OCR evidence**: Raw `Block` objects produced by RapidOCR must remain immutable. Model proposals and corrections must be recorded as additive refinement layers.
+3. **Downstream workflows**: The Classify, Section, Split, and Extract workflows must consume the canonical refined Markdown and grounding index rather than re-running OCR.
+4. **Prompt resource management**: Model prompt templates must be placed as versioned Markdown files in `src/agentic_extractor/prompts/` rather than hardcoded in Python code. Updates to prompt templates require incrementing the `prompt-version` metadata and updating expectations in `tests/test_prompt_resources.py`.
+5. **Untrusted document data**: Uploaded text, extracted OCR content, and user-provided schemas are treated as untrusted evidence. They must not alter application routing, policy, or tool execution.
+6. **Local scope**: Keep UI and API endpoints bound to local loopback (`127.0.0.1`). Do not introduce public hosting, external authentication systems, or multi-tenant database models.
+
+## Branch and testing expectations
+
+The repository does not contain automated remote CI pipelines (such as GitHub Actions) or issue/pull request templates. Reviewers rely entirely on local validation.
+
+Before opening a pull request or submitting changes, ensure the following commands complete without error:
+
+```powershell
+uv run ruff format --check .
+uv run ruff check .
+uv run ty check
+uv run pytest
+```
+
+If your changes touch the Streamlit user interface, launch the app locally and verify the UI on port `8841`:
+
+```powershell
+uv run streamlit run app.py --server.port 8841
+```
+
+If your changes affect the local API, run `tests/test_api.py` and verify Swagger documentation on port `8842`:
+
+```powershell
+uv run uvicorn agentic_extractor.api:app --host 127.0.0.1 --port 8842
+```
 
 ## Issue reporting
 
-Use [GitHub Issues](https://github.com/pypi-ahmad/OpenAI-X-RapidOCR-Agentic-Document_extraction/issues)
-for reproducible bugs and focused feature requests. No issue templates are
-currently configured.
-
-For a bug, include:
-
-- concise reproduction steps and expected versus actual behavior;
-- operating system, Python version, and relevant package versions;
-- whether the issue affects PDF, PNG, JPEG, or TIFF input;
-- sanitized logs and the smallest non-sensitive reproduction possible; and
-- whether RapidOCR used CUDA or CPU and which extraction mode was selected.
-
-Never attach credentials or confidential source documents. For feature requests,
-describe the document workflow, evidence requirement, and measurable acceptance
-criteria.
+When reporting issues, include:
+- A concise description of the observed behavior versus expected behavior.
+- Python version, operating system details, and hardware environment (GPU model or CPU).
+- Whether the failure occurs on PDF, PNG, JPEG, or TIFF input files.
+- Relevant console traceback messages.
+- Never include sensitive document contents or API credentials in issue reports.

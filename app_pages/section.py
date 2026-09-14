@@ -1,4 +1,10 @@
-"""Section outline results page."""
+"""Section outline results page.
+
+Read-only view over `st.session_state["workflow"]`. Must not call
+`run_agent_workflow` or any refinement/OCR function itself — Section runs
+only as part of Parse (see streamlit_app.py). Next: `agentic_extractor.workflow`
+for how `.sections` and `.review_items` are produced.
+"""
 
 import streamlit as st
 

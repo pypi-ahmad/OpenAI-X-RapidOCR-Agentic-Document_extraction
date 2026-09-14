@@ -2,8 +2,8 @@
 # Local API reference
 
 The FastAPI interface provides typed, versioned access to the same canonical
-RapidOCR and GPT workflow used by Streamlit. It is a synchronous, process-local
-surface for trusted clients on the same machine.
+RapidOCR, PP-DocLayoutV3, and GPT workflow used by Streamlit. It is a
+synchronous, process-local surface for trusted clients on the same machine.
 
 ## Start the API
 
@@ -38,9 +38,13 @@ sequenceDiagram
     participant Client
     participant API as Local FastAPI
     participant Parse as Canonical Parse
+    participant Layout as PP-DocLayoutV3
     participant Extract as Schema extraction
     Client->>API: POST /api/v1/jobs/parse
-    API->>Parse: RapidOCR then GPT refinement
+    API->>Parse: RapidOCR grounding
+    Parse->>Layout: Layout and reading-order detection
+    Layout-->>Parse: Grounded regions and structures
+    Parse->>Parse: Required GPT refinement
     Parse-->>API: Parse result and artifacts
     API-->>Client: Job ID and terminal state
     Client->>API: POST /api/v1/jobs/{job_id}/extract
@@ -58,6 +62,12 @@ workflows.
 Requests execute synchronously inside the HTTP handler. Although a submitted
 job is initially represented as `PROCESSING`, the `POST` response is returned
 after processing reaches `ACCEPTED`, `REVIEW_REQUIRED`, or `FAILED`.
+
+Before creating a job, the API validates OpenAI model access, then initializes
+RapidOCR and PP-DocLayoutV3. Missing or invalid OpenAI configuration and local
+engine initialization failures return HTTP `503`. Successfully initialized OCR
+and layout resources remain warm in the FastAPI process and are reused across
+subsequent jobs.
 
 ## Endpoints overview
 
@@ -83,6 +93,7 @@ after processing reaches `ACCEPTED`, `REVIEW_REQUIRED`, or `FAILED`.
 | `mode` | string | No | `Balanced` by default, or `High Accuracy`; High Accuracy requires a grounded accepted outcome for every OCR block with confidence below `0.85` |
 | `selected_pages` | integer array or null | No | Positive, one-based page numbers; duplicates are removed and values sorted |
 | `enable_preprocessing` | boolean | No | Defaults to `false` |
+| `include_atomic_grounding` | boolean | No | Defaults to `true`; includes source-backed `atomic_grounding` parts arrays in the Parse JSON |
 
 The content must be a supported readable PDF, PNG, JPEG, or TIFF. Format checks
 use source signatures rather than trusting only the filename extension.
@@ -93,9 +104,14 @@ use source signatures rather than trusting only the filename extension.
   "content_base64": "<base64-document-content>",
   "mode": "Balanced",
   "selected_pages": [1],
-  "enable_preprocessing": false
+  "enable_preprocessing": false,
+  "include_atomic_grounding": true
 }
 ```
+
+When `include_atomic_grounding` is `false`, the response omits only
+`atomic_grounding` arrays. Every semantic node retains its normal page, Unicode
+range, and normalized box in `grounding`.
 
 ### Response
 
@@ -126,11 +142,19 @@ HTTP `200` returns a `JobStatus` object:
   "failed_pages": [],
   "review_required": ["Review extracted field invoice_number"],
   "result": {
-    "contract_version": 3,
-    "selected_pages": [1],
-    "markdown": "<!-- page: 1 -->\n\nInvoice 42",
-    "warnings": [],
-    "failed_pages": []
+    "markdown": "Invoice 42\n\n<!-- document_id: local-... -->",
+    "metadata": {
+      "job_id": "local-...",
+      "model_version": "rapidocr-gpt-5.6-luna-pp-doclayout-v3",
+      "page_count": 1,
+      "output_markdown_chars": 49,
+      "range_units": "unicode_codepoints",
+      "openapi_spec": "/openapi.json",
+      "failed_pages": [],
+      "duration_ms": 1250,
+      "billing": {"service_tier": "local", "total_credits": null}
+    },
+    "structure": {"type": "document", "children": []}
   },
   "artifacts": {
     "document.md": "/api/v1/jobs/<opaque-job-id>/artifacts/document.md"
@@ -139,12 +163,23 @@ HTTP `200` returns a `JobStatus` object:
 }
 ```
 
-The `result` object is the canonical Parse JSON and may include fields beyond
-the minimum typed properties shown above. Raw `content_base64` is not returned.
-For the evidence model, see the [Domain model](domain-model.md).
+The `result` object is the LandingAI-shaped public Parse projection with exactly
+`markdown`, `metadata`, and `structure`. Its Unicode ranges address the emitted
+Markdown. The `manifest.json` retains per-page block counts plus derived layout,
+refinement, checkbox, timing, warning, and usage evidence; it does not serialize raw
+page blocks or chunks. Raw `content_base64` is never returned. For the evidence model,
+see the [Domain model](domain-model.md).
 
-For a High Accuracy job, per-block review coverage is exposed at
-`result.document_metadata.low_confidence_block_reviews`. Each entry contains
+`result.metadata.duration_ms` is the compact public duration. The ZIP bundle's
+`manifest.json` provides the detailed `timings` map and a `timing_analysis`
+summary with measured stage duration, share, and the slowest stage. It covers
+engine setup, ingest/rendering, page preparation, OCR, layout and table work,
+routing, GPT refinement, validation, repair, and artifact finalization when
+those stages run. Lazy PDF, HTML, and ZIP timings appear after the corresponding
+artifact has been generated; listing artifacts does not generate them.
+
+For a High Accuracy job, per-block review coverage is exposed in the artifact
+manifest's source/audit metadata. Each entry contains
 `block_id`, `page`, `ocr_score`, and a status of `accepted`, `rejected`,
 `abstained`, or `missing`, plus a reason when available. Only `accepted`
 indicates a grounded confirmation or correction. Any other status adds a
@@ -219,41 +254,49 @@ fields. It returns HTTP `409` only when the job has no workflow result.
 
 High Accuracy block-review records are not separate fields in this response.
 Their unresolved messages appear in `review_required` and corresponding
-structured `review_items`; retrieve the records themselves from job status or
-the generated canonical Parse JSON artifact.
+structured `review_items`; retrieve the records themselves from `manifest.json`.
 
-`checkboxes` contains grounded GPT-visual checkbox observations with RapidOCR label evidence,
-discovery and verification states, confidence, decision status, and review reason.
+`checkboxes` contains OpenCV pixel proposals, RapidOCR label grounding, Luna page discovery and
+independent crop verification, consensus status, confidence, decision status, and review reason.
 `checkbox_corrections` contains auditable local user decisions. Checkbox automation is
 best-effort; unresolved controls remain `REVIEW_REQUIRED`.
+
+The public Parse result follows the LandingAI-shaped `markdown`, `metadata`, and `structure`
+projection. The manifest keeps per-page block counts, `reading_order_evidence`,
+`table_structures`, derived layout evidence, review decisions, and usage; it omits raw page blocks
+and chunks. Table cells in the public structure
+use zero-based row/column indexes; their ranges address the emitted Unicode Markdown.
 
 ## List and download artifacts
 
 `GET /api/v1/jobs/{job_id}/artifacts` returns an `ArtifactList`. Each item
-contains `name`, byte length, SHA-256 digest, and an opaque job-scoped download
-URL.
+contains `name`, a `generated` flag, byte length, SHA-256 digest, and an opaque
+job-scoped download URL. Grounded Markdown and Parse JSON are available
+immediately. PDF, HTML, and ZIP artifacts are generated and cached only when
+first downloaded; their byte length and digest are `null` until then. Listing
+artifacts never triggers that work.
 
-The artifact-list response supplies the exact runtime name and download URL for
-each downloadable artifact:
+The artifact-list response supplies each exact runtime name and its job-scoped
+download URL:
 
-| Artifact | Media type | Contents |
-| --- | --- | --- |
-| Grounded Markdown | `text/markdown` | Refined, grounded Markdown |
-| Parse result | `application/json` | Canonical Parse contract and audit data |
-| Annotated document | `application/pdf` | Selected pages with OCR/layout geometry |
-| HTML layout | `text/html` | Refined Markdown rendered with page and grounding context |
-| ZIP bundle | `application/zip` | All generated artifacts, checkbox crops, and the export manifest |
+| Name | Download URL | Media type | Contents |
+| --- | --- | --- | --- |
+| `document.md` | `/api/v1/jobs/{job_id}/artifacts/document.md` | `text/markdown` | Refined, grounded Markdown |
+| `parse-result.json` | `/api/v1/jobs/{job_id}/artifacts/parse-result.json` | `application/json` | LandingAI-shaped Markdown and semantic grounding structure |
+| `annotated.pdf` | `/api/v1/jobs/{job_id}/artifacts/annotated.pdf` | `application/pdf` | Selected pages with semantic layout, accepted table, and accepted checkbox geometry |
+| `document.html` | `/api/v1/jobs/{job_id}/artifacts/document.html` | `text/html` | Self-contained page rasters with coordinate-positioned text and grounding overlays |
+| `bundle.zip` | `/api/v1/jobs/{job_id}/artifacts/bundle.zip` | `application/zip` | All generated artifacts, checkbox crops, and the export manifest |
 
-The downloaded Parse-result artifact uses the same
-`document_metadata.low_confidence_block_reviews` location as the job-status
-`result`. In the ZIP bundle, the export manifest copies document metadata under
-`source`, so the records are at `source.low_confidence_block_reviews`; workflow
-state and review messages are under `agent_workflow`.
+The ZIP manifest copies internal document metadata under `source`; High Accuracy block-review
+records are at `source.low_confidence_block_reviews`, while workflow state and review messages are
+under `agent_workflow`.
 
 Download an item through
-`GET /api/v1/jobs/{job_id}/artifacts/{artifact_name}`. The response includes a
-`Content-Disposition: attachment` filename. Unknown or non-allowlisted names
-return HTTP `404`; jobs without artifacts return HTTP `409`.
+`GET /api/v1/jobs/{job_id}/artifacts/{artifact_name}`. The first request for a
+PDF, HTML, or ZIP generates it; later requests reuse the in-memory job cache.
+The response includes a `Content-Disposition: attachment` filename. Unknown or
+non-allowlisted names return HTTP `404`; jobs without artifacts return HTTP
+`409`.
 
 ## Job states
 
@@ -298,6 +341,7 @@ array instead.
 | `422` | Request validation | Base64, nonpositive selected pages, field constraints, or JSON Schema is invalid |
 | `503` | `openai_unavailable` | OpenAI configuration is missing or cannot access the required model |
 | `503` | `rapidocr_unavailable` | RapidOCR or ONNX Runtime could not initialize |
+| `503` | `pp_doclayout_unavailable` | PP-DocLayoutV3 or its Paddle runtime could not initialize |
 
 Caught processing and extraction exceptions are retained in `JobStatus.error`
 with code `processing_failed` or `extraction_failed`, a message, suggested
@@ -359,6 +403,7 @@ request body or checked-in file.
 
 - Requests are synchronous; there is no worker queue or background job runner.
 - Jobs, uploaded bytes, results, and artifacts exist only in process memory.
+- Warm RapidOCR and PP-DocLayoutV3 resources also live only for the API process lifetime.
 - There is no persistence, authentication, authorization, rate limiting,
   streaming upload, multi-instance coordination, or tenant isolation.
 - There is no document-chat endpoint. Chat sources and conversation state are

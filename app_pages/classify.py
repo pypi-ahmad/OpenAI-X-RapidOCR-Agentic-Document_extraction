@@ -1,4 +1,10 @@
-"""Classification results page."""
+"""Classification results page.
+
+Read-only view over `st.session_state["workflow"]`. Must not call
+`run_agent_workflow` or any refinement/OCR function itself — Classify runs
+only as part of Parse (see streamlit_app.py). Next: `agentic_extractor.workflow`
+for how `.classifications` and `.review_items` are produced.
+"""
 
 import streamlit as st
 

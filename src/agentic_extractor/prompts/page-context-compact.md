@@ -1,8 +1,20 @@
-<!-- prompt-version: 4 -->
+<!-- prompt-version: 7 -->
 
 <PAGE_CONTEXT page="$page_number" detail="compact">
+<LOCAL_SEMANTIC_REGION_COLUMNS>$semantic_region_columns</LOCAL_SEMANTIC_REGION_COLUMNS>
+<LOCAL_SEMANTIC_REGIONS>
+$semantic_regions
+</LOCAL_SEMANTIC_REGIONS>
 <OCR_BLOCK_COLUMNS>$block_columns</OCR_BLOCK_COLUMNS>
 <OCR_BLOCKS>
 $blocks
 </OCR_BLOCKS>
+<PP_DOCLAYOUT_V3_REGIONS detail="compact">
+$layout_regions
+</PP_DOCLAYOUT_V3_REGIONS>
+<PP_DOCLAYOUT_V3_BLOCK_LINKS>
+$layout_links
+</PP_DOCLAYOUT_V3_BLOCK_LINKS>
+<READING_ORDER_EVIDENCE>$reading_order</READING_ORDER_EVIDENCE>
+<TABLE_STRUCTURE_EVIDENCE>$table_structures</TABLE_STRUCTURE_EVIDENCE>
 </PAGE_CONTEXT>

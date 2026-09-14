@@ -1,4 +1,13 @@
-"""Central GPT-5.6-luna rates and usage-based cost calculation."""
+"""Central GPT-5.6-luna rates and usage-based cost calculation.
+
+Responsible for: converting provider-reported token usage into a cost
+breakdown using the rates below, and aggregating per-call records for the
+usage panel. Must not: fabricate a cost when usage is missing or internally
+inconsistent (must return status "unavailable" instead), or treat these
+rates as anything but application policy — bump them here (and in tests)
+when pricing changes, not by patching values at call sites. Next:
+artifacts.py, which folds `rate_assumptions()` into the exported manifest.
+"""
 
 from dataclasses import asdict, dataclass
 from typing import Literal
@@ -39,9 +48,16 @@ class CostBreakdown:
 
 def calculate_usage_cost(usage: TokenUsage) -> CostBreakdown:
     """Calculate cost and flag incomplete API usage instead of fabricating it."""
+    # Strictly greater-than: a request at exactly LONG_PROMPT_THRESHOLD tokens
+    # does NOT get the multiplier. Keep this boundary exclusive on the low
+    # side if it is ever revisited; it mirrors the provider's own billing cutoff.
     long_prompt = usage.input_tokens is not None and usage.input_tokens > LONG_PROMPT_THRESHOLD
     input_multiplier = 2.0 if long_prompt else 1.0
     output_multiplier = 1.5 if long_prompt else 1.0
+    # Any missing or internally inconsistent field (negative counts, cached/
+    # cache-write tokens exceeding total input) makes the whole cost
+    # "unavailable" rather than partially computed — a wrong displayed cost
+    # is worse than an honest blank, since this feeds a user-facing dollar figure.
     if (
         usage.input_tokens is None
         or usage.output_tokens is None
@@ -77,6 +93,9 @@ def calculate_usage_cost(usage: TokenUsage) -> CostBreakdown:
         input_multiplier,
         output_multiplier,
         (
+            # "estimate" (not "unavailable") when totals are valid but the
+            # cached/cache-write breakdown wasn't reported: the uncached-rate
+            # cost is a safe upper bound, so it's still shown, just labeled.
             "exact"
             if usage.cached_input_tokens is not None and usage.cache_write_input_tokens is not None
             else "estimate"

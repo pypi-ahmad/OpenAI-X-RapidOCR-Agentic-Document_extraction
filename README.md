@@ -1,368 +1,214 @@
-<!-- generated-by: gsd-doc-writer -->
-# Agentic Document Extractor
+# Agentic document extractor
 
-A local Streamlit application for source-grounded document extraction with a mandatory RapidOCR first pass and OpenAI `gpt-5.6-luna` refinement.
+Agentic document extractor is a local-machine document processing application that combines RapidOCR, PP-DocLayoutV3, and OpenAI `gpt-5.6-luna` to extract structured, source-grounded content from PDF, PNG, JPEG, and TIFF files. The system executes RapidOCR for immutable text and coordinate detection, runs PP-DocLayoutV3 in an isolated worker process for region identification and table structure parsing, and refines the extraction using `gpt-5.6-luna` with medium reasoning effort. It provides interactive navigation and inspection via a Streamlit user interface, an optional local FastAPI HTTP service, deterministic schema validation, and on-demand artifact export (annotated PDF, interactive coordinate HTML, and ZIP manifest bundles).
 
-The application accepts PDFs and common images, preserves OCR evidence and coordinates, and supports an auditable workflow from parsing through structured extraction and review. It is intended for local users and local API clients; it does not provide public hosting, authentication, or multi-tenant isolation.
+## Requirements
 
-## Key features
+The codebase has the following runtime and environment requirements derived from repository manifests and source configurations:
 
-- Processes PDF, PNG, JPEG, and TIFF uploads up to 50 MiB and 200 pages.
-- Supports inclusive PDF page ranges and single-page image processing.
-- Requires RapidOCR and GPT for every successful extraction; there is no single-engine fallback.
-- Uses `gpt-5.6-luna` with `reasoning_effort="medium"` for every OpenAI request.
-- Offers Balanced and High Accuracy review modes.
-- Produces grounded Markdown, canonical Parse JSON, an annotated PDF, semantic HTML, and a ZIP manifest bundle.
-- Runs classification, sectioning, multi-document splitting, schema extraction, deterministic validation, and review routing.
-- Accepts JSON Schema, guided field definitions, or Markdown field descriptions.
-- Reports page-quality heuristics, workflow progress, token usage, and GPT cost.
-- Provides session-only document chat grounded exclusively in generated Parse Markdown.
-- Exposes an optional typed, versioned FastAPI interface over the same pipeline.
+- **Operating system**: Windows (required). The PP-DocLayoutV3 worker configuration in `tools/pp_doclayout/pyproject.toml` is constrained to `sys_platform == 'win32'`, worker invocation in `src/agentic_extractor/layout.py` calls `.venv/Scripts/python.exe`, and the background service launcher `run_app.cmd` is a Windows batch script.
+- **Python version**: Python `>=3.13` for the main application (specified in `pyproject.toml` and `.python-version`); `>=3.13,<3.14` for the isolated layout worker environment (`tools/pp_doclayout/pyproject.toml`).
+- **Package manager**: `uv` is required to resolve dependencies and manage the dual virtual environments.
+- **OpenAI API credentials**: A valid `OPENAI_API_KEY` environment variable with access to the `gpt-5.6-luna` model.
+- **Hardware and accelerator**: Optional NVIDIA GPU with CUDA 12 support. RapidOCR uses `onnxruntime-gpu` with runtime fallback to CPU. The PP-DocLayoutV3 worker environment includes `paddlepaddle-gpu==3.2.0` with CPU fallback.
 
-## Technology stack
+## Setup and installation
 
-| Area | Technology |
-| --- | --- |
-| Runtime and packaging | Python 3.13, `uv`, Hatchling |
-| User interface | Streamlit 1.62 or newer |
-| Local OCR | RapidOCR, ONNX, ONNX Runtime GPU with CPU fallback |
-| Semantic refinement | OpenAI Responses API, `gpt-5.6-luna` |
-| PDF and image handling | pypdf, pypdfium2, Pillow, NumPy |
-| Data contracts and validation | Pydantic, JSON Schema |
-| Local HTTP API | FastAPI, Uvicorn |
-| Quality gates | pytest, pytest-cov, Ruff, ty |
-
-Exact constraints and the pinned RapidOCR revision are defined in [`pyproject.toml`](pyproject.toml) and [`uv.lock`](uv.lock).
-
-## Installation
-
-Prerequisites:
-
-- Windows or Linux (the locked `onnxruntime-gpu` dependency does not provide a
-  macOS wheel)
-- [`uv`](https://docs.astral.sh/uv/)
-- An OpenAI API key with access to `gpt-5.6-luna`
-- Optional NVIDIA GPU; RapidOCR falls back to CPU when CUDA is unavailable
-
-Clone the [GitHub repository](https://github.com/pypi-ahmad/OpenAI-X-RapidOCR-Agentic-Document_extraction):
-
-```powershell
-git clone https://github.com/pypi-ahmad/OpenAI-X-RapidOCR-Agentic-Document_extraction.git
-cd OpenAI-X-RapidOCR-Agentic-Document_extraction
-```
-
-Synchronize the project-root environment, including development tools:
-
-```powershell
-uv sync --all-groups
-```
-
-Set the OpenAI key in the process environment. Never place its value in source files:
-
-```powershell
-$env:OPENAI_API_KEY = "<your key>"
-```
-
-`OPENAI_BASE_URL` is optional and should normally remain unset. See [`docs/CONFIGURATION.md`](docs/CONFIGURATION.md) for details.
-
-## Quick start
-
-1. Start Streamlit on the configured local port:
+1. Clone the repository:
 
    ```powershell
-   uv run streamlit run app.py --server.port 8841
+   git clone https://github.com/pypi-ahmad/OpenAI-X-RapidOCR-Agentic-Document_extraction.git
+   cd OpenAI-X-RapidOCR-Agentic-Document_extraction
    ```
 
-2. Open [http://127.0.0.1:8841](http://127.0.0.1:8841).
+2. Synchronize root dependencies and development tools:
 
-3. Upload a supported document, select the pages and processing mode, define any optional workflow inputs, then choose **Extract document**.
+   ```powershell
+   uv sync --all-groups
+   ```
 
-4. Open **Chat**, select one or more processed documents, and ask questions grounded in their generated Markdown.
+3. Synchronize the isolated PP-DocLayoutV3 worker environment:
 
-On Windows, run [`run_app.cmd`](run_app.cmd) instead. The launcher displays logs in the foreground, identifies the PIDs listening on TCP port `8841`, revalidates each listener, and force-stops only verified listeners on that port before startup. It keeps the console open after an error or normal exit.
+   ```powershell
+   uv sync --project tools/pp_doclayout --locked
+   ```
 
-The installed console script is another equivalent entry point:
+   The worker environment isolates PaddleX 3.4 and PaddlePaddle GPU 3.2 from the main application's dependencies due to incompatible OpenCV requirements.
+
+4. Set the OpenAI API key in your terminal session:
+
+   ```powershell
+   $env:OPENAI_API_KEY = "your-api-key"
+   ```
+
+## Run commands
+
+### Streamlit web interface
+
+The Streamlit web application is the primary interactive user interface, running on TCP port `8841`.
+
+Start using `uv`:
+
+```powershell
+uv run streamlit run app.py --server.port 8841
+```
+
+Or run using the installed console script:
 
 ```powershell
 uv run agentic-extractor
 ```
 
-## Usage examples
+Or launch using the Windows batch launcher:
 
-- **Parse a selected page range:** Upload a PDF on **Parse**, choose an inclusive start and end
-  page, then run extraction to produce grounded Markdown, Parse JSON, HTML, an annotated PDF, and
-  the ZIP bundle.
-- **Extract structured fields:** Process a document, open **Extract**, and supply JSON Schema,
-  guided fields, or Markdown field descriptions. The result includes source grounding, validation
-  status, and review reasons for uncertain fields.
-- **Ask document-grounded questions:** After Parse completes, open **Chat**, select one or more
-  processed documents, and ask a question. Answers use only retrieved excerpts from the generated
-  Markdown and show their cited excerpts.
-
-## How extraction works
-
-Both engines are mandatory and execute in this order:
-
-1. The application validates OpenAI model access and initializes RapidOCR.
-2. The selected source pages are rendered and analyzed locally.
-3. RapidOCR extracts text, recognition scores, polygons, and engine metadata.
-4. Geometry-based parsing reconstructs reading order and candidate layout.
-5. GPT validates and refines text and structure against grounded OCR evidence.
-6. Optional Classify, Section, Split, and Extract workflows send the refined Markdown plus a
-   compact grounding index to GPT; they do not resend source page images.
-7. Deterministic validation either accepts the output, requests review, or fails.
-8. Artifacts are generated only from the selected pages and canonical result.
-
-Missing or invalid OpenAI configuration blocks processing before OCR starts. RapidOCR initialization failure also blocks processing with an actionable setup message. GPT cannot replace missing OCR evidence, and refinements never overwrite raw OCR blocks.
-
-### Processing modes
-
-| Mode | RapidOCR scope | GPT context and visual review |
-| --- | --- | --- |
-| **Balanced** | Every selected page | Compact grounded evidence plus every page image for checkbox discovery; fuller OCR/layout context only for uncertain or complex pages and regions |
-| **High Accuracy** | Every selected page | Page image and full relevant OCR evidence for every selected page |
-
-Both modes invoke the same required model at medium reasoning effort. Every page image is now
-included for checkbox discovery; the modes differ in how much OCR and layout context GPT reviews.
-
-High Accuracy also flags every RapidOCR block with recognition confidence strictly below `0.85`
-for an explicit outcome in the existing GPT page-refinement request; it does not make an extra GPT
-call. A grounded, accepted confirmation or correction resolves the flag. A missing, rejected, or
-abstained outcome leaves the source block intact and makes the workflow `REVIEW_REQUIRED`.
-Balanced mode does not enforce this per-block outcome coverage.
-
-## Agentic workflow
-
-```text
-VALIDATED -> NORMALIZED -> PARSED -> CLASSIFIED -> SECTIONED -> SPLIT
--> EXTRACTED -> VALIDATED -> ACCEPTED | REVIEW_REQUIRED | FAILED
+```cmd
+run_app.cmd
 ```
 
-- **Parse** creates Markdown, ordered blocks, chunks, confidence, coordinates, metadata, warnings, failed-page records, timings, and engine provenance.
-- **Classify** assigns only user-allowlisted page or document classes and retains supporting evidence.
-- **Section** builds a hierarchical outline linked to pages and chunks.
-- **Split** detects logical document boundaries and accepts explicit overrides.
-- **Extract** produces evidence-bearing fields constrained by the selected schema.
-- **Validate** checks schema rules and review policy before acceptance.
+`run_app.cmd` verifies that `uv` exists, stops any existing process listening on TCP port `8841`, and starts Streamlit in the foreground.
 
-Document text is treated as untrusted data. It cannot change application policy, tools, routing, schemas, or permissions.
+Once started, access the web interface at `http://127.0.0.1:8841`.
 
-## Document chat
+### Local HTTP API
 
-The **Chat** page answers questions, summarizes, explains, compares, and locates information using
-only generated Parse Markdown from documents processed during the current browser session. Up to
-12 processed documents can be selected at once. The chat request never receives uploaded files,
-page images, OCR objects, artifact bytes, or external knowledge. The page displays the active
-document scope and cited Markdown excerpts beneath each grounded answer.
+The FastAPI service exposes programmatic job submission, status queries, schema extraction, and artifact downloads on TCP port `8842`.
 
-Scopes up to 40,000 Markdown characters are supplied in full. Longer scopes use local,
-page-and-heading-aware lexical retrieval capped at 12 excerpts, while broad summary and comparison
-requests use samples distributed across the selected documents. Luna receives at most the six most
-recent visible chat messages. Changing the selected documents starts a new conversation so facts
-cannot leak between scopes. Off-topic requests are redirected, unsupported questions receive an
-explicit insufficient-evidence response, and instructions found inside document text or user
-messages cannot change the document-only policy.
-
-Processed chat sources and conversation history are held only in Streamlit session state. They are
-lost when the browser session or server ends, and **Reset** clears them immediately.
-
-## Structured extraction schemas
-
-The sidebar supports three inputs that normalize into the same internal schema:
-
-1. **JSON Schema** for complete control over types, required fields, formats, patterns, numeric ranges, and schema-specific confidence thresholds.
-2. **Guided fields** for defining names, descriptions, types, and requirements.
-3. **Markdown fields** using `## field_name` headings and descriptions:
-
-   ```markdown
-   ## invoice_number
-   Unique invoice identifier.
-
-   ## invoice_date
-   Issue date in YYYY-MM-DD format.
-   ```
-
-Field names must be unique. Extracted fields retain original and normalized values, source text, page and chunk IDs, coordinates when available, both-engine provenance, confidence, validation status, and review or abstention reason.
-
-### Checkbox handling
-
-GPT visually discovers square checkboxes on every selected page while RapidOCR supplies nearby
-label text and geometry. High-confidence, grounded `CHECKED` and `UNCHECKED` controls may be
-accepted automatically. Ambiguous states, weak label grounding, poor page quality, overlapping
-controls, or rule conflicts receive one crop-based GPT verification and then require human review
-when unresolved. Human decisions are stored as corrections without replacing OCR or GPT evidence.
-
-Checkbox output is best-effort automation, not a 100% accuracy guarantee. Radio buttons and
-signatures are outside the checkbox detector's scope.
-
-Validation covers required fields, data types, date formats, identifier patterns, numeric ranges, configurable sums and totals, and cross-field relationships. Unsupported or uncertain values are abstained or marked `REVIEW_REQUIRED`; they are never represented as verified.
-
-## Outputs and artifacts
-
-Each successful run exposes:
-
-- rendered and raw Markdown
-- generated Markdown download artifact
-- generated JSON ZIP artifact with the canonical evidence-bearing Parse contract
-- `annotated.pdf` showing OCR and layout regions from real geometry
-- generated HTML download artifact, standalone semantic HTML rendered from refined Markdown with page and grounding context
-- ZIP bundle containing all artifacts, checkbox evidence crops, and a generated JSON manifest
-
-The HTML view renders refined Markdown without embedding source-page images. It preserves selected-page boundaries and includes expandable block IDs, coordinates, confidence, and checkbox grounding. The manifest records selected pages, hashes, engine and model metadata, workflow decisions, refinements, usage, cost assumptions, warnings, and failures.
-
-All OpenAI-facing policy, task, visual-label, page-context, and block-context prompts are Markdown
-resources under `src/agentic_extractor/prompts/`. Their filenames are unversioned; internal prompt
-metadata, usage records, and manifests retain the prompt version and SHA-256 digest.
-
-## Quality, usage, and cost diagnostics
-
-Before extraction, per-page diagnostics report dimensions, estimated source or render DPI, skew, sharpness and blur, contrast, shadows, likely JPEG block artifacts, and possible cropped edges. These are routing and rescan heuristics, not calibrated accuracy scores.
-
-The Usage & Cost panel reports API calls; input, cached-input, output, and total
-tokens when returned; per-call details; labeled per-page estimates; and session
-totals. Reasoning tokens are retained in usage records and exports when the API
-reports them. RapidOCR API cost is reported as `$0.00`; electricity and hardware
-costs are not estimated.
-
-Configured rates per one million tokens are:
-
-- uncached input: `$0.20`
-- cached input: `$0.02`
-- cache writes: `$0.25`
-- output: `$1.20`
-
-```text
-cost = uncached_input / 1,000,000 * 0.20
-     + cached_input / 1,000,000 * 0.02
-     + cache_write_input / 1,000,000 * 0.25
-     + output / 1,000,000 * 1.20
-```
-
-For a request above 272,000 input tokens, the entire request uses a `2x` input multiplier and `1.5x` output multiplier. When usage is unavailable, the UI labels the value as estimated or unavailable instead of fabricating a total.
-
-## Local API
-
-Start the optional API separately on local port `8842`:
+Start the API service:
 
 ```powershell
 uv run uvicorn agentic_extractor.api:app --host 127.0.0.1 --port 8842
 ```
 
-OpenAPI documentation is available at [http://127.0.0.1:8842/docs](http://127.0.0.1:8842/docs) while the server is running. No authentication or rate limiting is implemented because this surface is designed only for trusted local-machine use.
+Interactive OpenAPI documentation is available at `http://127.0.0.1:8842/docs`.
 
-| Method | Endpoint | Purpose |
-| --- | --- | --- |
-| `POST` | `/api/v1/jobs/parse` | Submit base64 document content and run Parse |
-| `GET` | `/api/v1/jobs/{job_id}` | Read job state, Parse output, warnings, and failures |
-| `POST` | `/api/v1/jobs/{job_id}/extract` | Run versioned schema extraction from an existing Parse result |
-| `GET` | `/api/v1/jobs/{job_id}/extraction` | Read grounded fields, corrections, and review items |
-| `GET` | `/api/v1/jobs/{job_id}/artifacts` | List artifact size, SHA-256 digest, and download URL |
-| `GET` | `/api/v1/jobs/{job_id}/artifacts/{artifact_name}` | Download an allowlisted artifact |
+## Configuration
 
-Example Parse submission in PowerShell:
+### Environment variables
 
-```powershell
-$body = @{
-    file_name = "invoice.png"
-    content_base64 = [Convert]::ToBase64String(
-        [IO.File]::ReadAllBytes("invoice.png")
-    )
-    mode = "Balanced"
-} | ConvertTo-Json
+The application reads the following environment variables:
 
-Invoke-RestMethod http://127.0.0.1:8842/api/v1/jobs/parse `
-    -Method Post -ContentType "application/json" -Body $body
-```
+| Variable | Required | Default | Purpose |
+|---|---|---|---|
+| `OPENAI_API_KEY` | Yes | Unset | API key for `gpt-5.6-luna` refinement and document chat requests. |
+| `OPENAI_BASE_URL` | No | Unset | Optional custom base URL for the OpenAI client. |
+| `ADE_OCR_MAX_WORKERS` | No | `4` | Maximum parallel worker processes for CPU-based RapidOCR page processing (integer from `1` to `4`). |
+| `CUDA_PATH` | No | Unset | Optional CUDA installation root directory on Windows; used by `src/agentic_extractor/ocr.py` to register `bin/x64` and `bin` on `PATH` for ONNX Runtime DLL discovery. |
+| `RUN_LIVE_PROMPT_EVAL` | No | Unset | Test suite variable. Set to `1` to enable live paid OpenAI model tests in `tests/test_prompt_quality_live.py`. |
 
-Jobs run synchronously, remain in process memory, and expire one hour after submission. Restarting the API loses all jobs. See [`docs/API.md`](docs/API.md) for complete request, response, state, and error documentation.
+### Configuration files
 
-## Architecture
+- `pyproject.toml`: Root package definition, dependencies, pinned RapidOCR Git revision (`e7edb012372f9ec5cf9e38a1e1e7b6abd489a2e7`), build settings via Hatchling, Ruff linter/formatter rules, and pytest options.
+- `tools/pp_doclayout/pyproject.toml`: Dependency specification and index configuration for the locked PP-DocLayoutV3 worker environment.
+- `.python-version`: Pins Python version `3.13`.
+- `.streamlit/config.toml`: Streamlit server settings (`address = "127.0.0.1"`, `port = 8841`, `maxUploadSize = 50`), browser metrics disabling, and UI dark theme styling.
 
-The Streamlit and FastAPI entry points converge on the same canonical workflow:
-
-```mermaid
-flowchart LR
-    UI[Streamlit UI] --> WF[Canonical workflow]
-    API[Local FastAPI v1] --> WF
-    WF --> OCR[RapidOCR grounding]
-    OCR --> GPT[GPT refinement]
-    GPT --> VAL[Validation and review]
-    VAL --> ART[Artifacts and manifest]
-```
-
-The implementation separates ingestion, OCR, parsing, refinement, workflows, models, artifacts, cost accounting, and UI state. For the full runtime sequence and evidence boundary, read [`docs/architecture.md`](docs/architecture.md).
-
-## Project structure
+## Repository map
 
 ```text
-.
-|-- .streamlit/config.toml      Streamlit server and theme configuration
-|-- app.py                      Streamlit navigation entry point
-|-- streamlit_app.py            Parse workspace
-|-- app_pages/                  Classify, Section, Split, Extract, and document Chat pages
-|-- run_app.cmd                 Windows foreground launcher for port 8841
-|-- src/agentic_extractor/      Canonical models, pipeline, workflows, API, and artifacts
-|-- tests/                      Focused unit and integration tests
-|-- docs/                       Architecture, API, setup, development, and domain guides
-|-- knowledge/                  Reference research data
-|-- pyproject.toml              Package metadata, dependencies, and tool configuration
-`-- uv.lock                     Reproducible dependency lock
+OpenAI-X-RapidOCR-Agentic-Document_extraction/
+|-- app.py                          Streamlit navigation root and session initialization
+|-- streamlit_app.py                Primary Parse interface, previews, and controls
+|-- run_app.cmd                     Windows batch launcher for Streamlit on port 8841
+|-- pyproject.toml                  Root project manifest, dependencies, and tool configs
+|-- uv.lock                         Pinned dependency lockfile for the root project
+|-- app_pages/                      Auxiliary Streamlit pages
+|   |-- chat.py                     Document-grounded session chat page
+|   |-- classify.py                 Document and page classification page
+|   |-- diagnostics.py              System readiness, stage timings, and bottleneck analysis
+|   |-- extract.py                  Structured schema extraction interface
+|   |-- html.py                     Interactive coordinate-positioned HTML viewer page
+|   |-- section.py                  Document hierarchical sectioning page
+|   |-- split.py                    Logical document boundary splitting page
+|-- src/agentic_extractor/          Core application package
+|   |-- api.py                      FastAPI service routes and job lifecycle handling
+|   |-- artifacts.py                Artifact generation (Markdown, JSON, PDF, HTML, ZIP)
+|   |-- cache.py                    Bounded process-memory LRU caches for pages, OCR, and layout
+|   |-- capabilities.py             Validation for classification, sectioning, splitting, extraction
+|   |-- checkbox_vision.py          OpenCV checkbox detection and pixel state analysis
+|   |-- cli.py                      Console script entry point for `agentic-extractor`
+|   |-- config.py                   Application limits, model definitions, and settings
+|   |-- costs.py                    Token usage tracking and cost calculations
+|   |-- document_chat.py            Lexical chunking, retrieval, and conversation handling
+|   |-- evaluation_data.py          Review pack schema for evaluation datasets
+|   |-- export.py                   ZIP bundle assembly helper
+|   |-- ingest.py                   File validation, signature checking, and image decoding
+|   |-- landing_contract.py         LandingAI-compatible `parse-result.json` projection
+|   |-- layout.py                   PP-DocLayoutV3 worker client and layout merging
+|   |-- layout_html.py              Standalone HTML document generator with SVG overlays
+|   |-- models.py                   Pydantic and dataclass models across all layers
+|   |-- ocr.py                      RapidOCR execution, worker pools, and ONNX Runtime device handling
+|   |-- openai_refiner.py           OpenAI client calls, structured outputs, and visual review
+|   |-- oracle_eval.py              Evaluation comparison against ground-truth Parse results
+|   |-- parse.py                    Reading order sorting, chunking, and Markdown synthesis
+|   |-- pipeline.py                 Dual-engine pipeline orchestration and refinement merge
+|   |-- prompt_resources.py         Versioned prompt loader and SHA-256 integrity verifier
+|   |-- prompts/                    Packaged versioned Markdown prompt templates
+|   |-- quality.py                  Image quality heuristics and optional preprocessing
+|   |-- redaction_vision.py         Visual redaction mask detection
+|   |-- schema_input.py             JSON Schema, guided field, and Markdown schema parsers
+|   |-- table_structure.py          Table structure validation, cell grounding, and HTML rendering
+|   |-- timing.py                   Wall-clock stage timing collection and bottleneck ranking
+|   |-- ui_state.py                 Streamlit session state management and document caching
+|   |-- visual_routing.py           Heuristic selection of high-detail image crops for Luna review
+|   |-- workflow.py                 End-to-end agent workflow state machine
+|-- tools/                          Auxiliary tools and worker environments
+|   |-- pp_doclayout/               Isolated PaddleX PP-DocLayoutV3 worker and lockfile
+|   |-- run_corpus_validation.py    Multi-document batch evaluation script
+|   |-- run_real_validation.py      Single-document evaluation comparison script
+|-- tests/                          Test suite with 320+ unit and integration tests
+`-- docs/                           Detailed architectural and operational documentation
 ```
 
-## Development and testing
+## How to run tests
 
-Run all configured quality gates from the repository root:
+The test suite uses `pytest` and enforces a strict minimum code coverage gate of 80% on `agentic_extractor`.
+
+Run the full test suite:
+
+```powershell
+uv run pytest
+```
+
+Run a specific test file without the coverage threshold addopts:
+
+```powershell
+uv run pytest -o addopts="" tests/test_local_parse.py
+```
+
+Run code formatting and static type checks:
 
 ```powershell
 uv run ruff format --check .
 uv run ruff check .
 uv run ty check
-uv run pytest
 ```
 
-Pytest enforces strict marker registration and at least 80% package coverage. The default suite mocks OpenAI boundaries and does not make paid API calls. The end-to-end API coverage uses fake OCR and mocked OpenAI responses while exercising the real adapters, ZIP bundle, and manifest contracts.
-
-An explicitly paid prompt smoke benchmark is available with valid OpenAI configuration:
+Run live OpenAI prompt evaluations (requires valid API key and incurred API usage):
 
 ```powershell
 $env:RUN_LIVE_PROMPT_EVAL = "1"
 uv run pytest tests/test_prompt_quality_live.py -m live -s
 ```
 
-It checks curated grounding, abstention, and checkbox cases; it is not a real-world accuracy claim.
+## Known limitations
 
-See [`docs/DEVELOPMENT.md`](docs/DEVELOPMENT.md) for commands and code style, and [`docs/TESTING.md`](docs/TESTING.md) for test organization and focused runs.
+- **Windows dependency**: The PP-DocLayoutV3 worker runtime is configured only for Windows (`tools/pp_doclayout/pyproject.toml` contains `sys_platform == 'win32'`), and `src/agentic_extractor/layout.py` explicitly targets the Windows virtual environment path `.venv/Scripts/python.exe`.
+- **Mandatory three-engine processing**: RapidOCR, PP-DocLayoutV3, and OpenAI `gpt-5.6-luna` are all required for a successful extraction. There is no offline-only, OCR-only, or single-engine fallback mode.
+- **In-memory job and cache lifecycle**: The FastAPI service and Streamlit app store job objects, upload data, and rendered page caches in process memory. API jobs expire after 3600 seconds (lazy cleanup on subsequent lookups). Restarting the process discards all jobs and cached data.
+- **Upload constraints**: Maximum upload size is 50 MiB, maximum page count is 200 pages, and maximum image resolution is 25,000,000 pixels. Multi-frame TIFFs are rejected.
+- **Security model**: The application and API are intended exclusively for trusted local-machine operation on `127.0.0.1`. No authentication, user authorization, or rate limiting is implemented.
+- **Document chat retrieval**: Document chat uses local lexical ranking rather than semantic vector embeddings. Questions containing vocabulary that diverges significantly from the generated Markdown text may fail to retrieve relevant passages.
+- **Heuristic scoring**: Checkbox detection, redaction detection, layout confidence, and image quality metrics use heuristic thresholds rather than calibrated probability models.
 
-## Contributing
+## Documentation index
 
-See [`CONTRIBUTING.md`](CONTRIBUTING.md) for guidelines.
-
-## Limitations
-
-- Both RapidOCR and valid OpenAI model access are required; offline-only and OCR-only successful workflows are intentionally unsupported.
-- The local API has no authentication, rate limiting, durable storage, worker queue, streaming upload, or multi-instance coordination.
-- Jobs and uploaded content are held in process memory and expire after one hour.
-- Base64 API uploads add encoding overhead; the Streamlit uploader is preferable for interactive local use.
-- Balanced routing and image-quality diagnostics use explicit heuristics rather than calibrated accuracy or performance guarantees.
-- Automatic rotation and deskew are not applied without reliable orientation evidence.
-- TIFF behavior depends on formats supported reliably by Pillow.
-- Document chat is session-only. Long-document retrieval is lexical and can miss relevant passages
-  when a question uses substantially different vocabulary from the generated Markdown.
-
-## Documentation
-
-- [Getting started](docs/GETTING-STARTED.md)
-- [Configuration](docs/CONFIGURATION.md)
-- [Architecture](docs/architecture.md)
-- [Context engineering](docs/CONTEXT-ENGINEERING.md)
-- [Local API](docs/API.md)
-- [Development](docs/DEVELOPMENT.md)
-- [Testing](docs/TESTING.md)
-- [Domain model](docs/domain-model.md)
-- [Glossary](docs/glossary.md)
-- [ADR 0001: mandatory dual-engine pipeline](docs/adr/0001-mandatory-dual-engine-pipeline.md)
-- [ADR 0002: evidence-preserving refinements](docs/adr/0002-preserve-evidence-and-audit-refinements.md)
-
-## License
-
-Licensed under the [MIT License](LICENSE).
+- [Architecture](docs/ARCHITECTURE.md): Data flow diagrams, module responsibilities, state lifecycle, and external systems.
+- [Technical reference](docs/TECHNICAL.md): Stack choices, system invariants, error handling protocols, and persistence paths.
+- [Runbook](docs/RUNBOOK.md): Startup, shutdown, process management, diagnostics, and failure recovery.
+- [Contributing guide](CONTRIBUTING.md): Standards for code, tests, documentation, and pull requests.
+- [Local API specification](docs/API.md): Endpoint descriptions, request and response contracts, and error structures.
+- [Configuration guide](docs/CONFIGURATION.md): Complete list of application settings and runtime environments.
+- [Context engineering](docs/CONTEXT-ENGINEERING.md): Prompt packaging, visual crop routing, and Luna context contracts.
+- [Development guide](docs/DEVELOPMENT.md): Detailed local development workflows and commands.
+- [Getting started](docs/GETTING-STARTED.md): Step-by-step onboarding walkthrough.
+- [Testing reference](docs/TESTING.md): Test suite organization and test fixture descriptions.

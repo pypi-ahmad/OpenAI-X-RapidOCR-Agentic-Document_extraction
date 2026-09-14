@@ -1,4 +1,10 @@
-"""Document split results page."""
+"""Document split results page.
+
+Read-only view over `st.session_state["workflow"]`. Must not call
+`run_agent_workflow` or any refinement/OCR function itself — Split runs only
+as part of Parse (see streamlit_app.py). Next: `agentic_extractor.workflow`
+for how `.splits` and `.review_items` are produced.
+"""
 
 import streamlit as st
 

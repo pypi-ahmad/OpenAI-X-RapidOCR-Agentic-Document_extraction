@@ -1,0 +1,322 @@
+{
+  "schema_version": "1.0",
+  "dataset_id": "masked-amerigroup-pages-1-2",
+  "coordinate_space": "normalized_top_left_xyxy",
+  "source": {
+    "filename": "Masked_Amerigroup_RealSolutions_1.pdf",
+    "sha256": "d6b09f6bfc4027d079c4364a6c2b6ecfd04dfb2e10c7def5383d9bca64541bcd",
+    "selected_pages": [1, 2]
+  },
+  "approval": {
+    "status": "pending_human_review",
+    "reviewer_name": null,
+    "reviewed_at": null
+  },
+  "candidate_provenance": [
+    "Checkbox candidates were manually localized against a 2.5x raster of source page 2 by an AI coding assistant.",
+    "Table boxes and candidate grid counts were seeded from the user-designated LandingAI oracle and visually checked against source page 2.",
+    "No candidate in this file is represented as independently human-authored or human-approved."
+  ],
+  "page_summaries": [
+    {"page": 1, "table_count": 0, "checkbox_count": 0},
+    {"page": 2, "table_count": 3, "checkbox_count": 25}
+  ],
+  "tables": [
+    {
+      "id": "p2-table-referring-provider",
+      "page": 2,
+      "bbox": [0.05102, 0.23569, 0.92789, 0.33417],
+      "review_status": "pending_human_review",
+      "semantic_role": "referring_provider",
+      "expected_rows": 6,
+      "expected_columns": 2,
+      "expected_cells": 10,
+      "row_cell_counts": [1, 1, 2, 2, 2, 2]
+    },
+    {
+      "id": "p2-table-servicing-provider",
+      "page": 2,
+      "bbox": [0.04954, 0.33304, 0.92769, 0.43503],
+      "review_status": "pending_human_review",
+      "semantic_role": "servicing_provider",
+      "expected_rows": 6,
+      "expected_columns": 3,
+      "expected_cells": 18,
+      "row_cell_counts": [3, 3, 3, 3, 3, 3]
+    },
+    {
+      "id": "p2-table-servicing-facility",
+      "page": 2,
+      "bbox": [0.04838, 0.43456, 0.92686, 0.51515],
+      "review_status": "pending_human_review",
+      "semantic_role": "servicing_facility",
+      "expected_rows": 5,
+      "expected_columns": 2,
+      "expected_cells": 10,
+      "row_cell_counts": [2, 2, 2, 2, 2]
+    }
+  ],
+  "checkboxes": [
+    {
+      "id": "p2-checkbox-referring-participating",
+      "page": 2,
+      "bbox": [0.25213, 0.23641, 0.27446, 0.25187],
+      "review_status": "pending_human_review",
+      "group": "referring_provider",
+      "label": "Participating",
+      "state": "unchecked"
+    },
+    {
+      "id": "p2-checkbox-referring-nonparticipating",
+      "page": 2,
+      "bbox": [0.40643, 0.23791, 0.42810, 0.25337],
+      "review_status": "pending_human_review",
+      "group": "referring_provider",
+      "label": "Nonparticipating",
+      "state": "checked"
+    },
+    {
+      "id": "p2-checkbox-servicing-provider-participating",
+      "page": 2,
+      "bbox": [0.25148, 0.33566, 0.27249, 0.35112],
+      "review_status": "pending_human_review",
+      "group": "servicing_provider",
+      "label": "Participating",
+      "state": "unchecked"
+    },
+    {
+      "id": "p2-checkbox-servicing-provider-nonparticipating",
+      "page": 2,
+      "bbox": [0.40578, 0.33666, 0.42613, 0.35212],
+      "review_status": "pending_human_review",
+      "group": "servicing_provider",
+      "label": "Nonparticipating",
+      "state": "checked"
+    },
+    {
+      "id": "p2-checkbox-servicing-facility-participating",
+      "page": 2,
+      "bbox": [0.25016, 0.43641, 0.27118, 0.45187],
+      "review_status": "pending_human_review",
+      "group": "servicing_facility",
+      "label": "Participating",
+      "state": "unchecked"
+    },
+    {
+      "id": "p2-checkbox-servicing-facility-nonparticipating",
+      "page": 2,
+      "bbox": [0.40512, 0.43741, 0.42416, 0.45287],
+      "review_status": "pending_human_review",
+      "group": "servicing_facility",
+      "label": "Nonparticipating",
+      "state": "checked"
+    },
+    {
+      "id": "p2-checkbox-service-outpatient",
+      "page": 2,
+      "bbox": [0.19435, 0.57855, 0.20814, 0.58753],
+      "review_status": "pending_human_review",
+      "group": "type_of_service",
+      "label": "Outpatient",
+      "state": "checked"
+    },
+    {
+      "id": "p2-checkbox-service-planned-inpatient",
+      "page": 2,
+      "bbox": [0.33158, 0.57905, 0.34406, 0.58853],
+      "review_status": "pending_human_review",
+      "group": "type_of_service",
+      "label": "Planned inpatient",
+      "state": "unchecked"
+    },
+    {
+      "id": "p2-checkbox-service-emergent-inpatient",
+      "page": 2,
+      "bbox": [0.51740, 0.58055, 0.53053, 0.59052],
+      "review_status": "pending_human_review",
+      "group": "type_of_service",
+      "label": "Emergent inpatient",
+      "state": "unchecked"
+    },
+    {
+      "id": "p2-checkbox-service-skilled-nursing",
+      "page": 2,
+      "bbox": [0.70519, 0.58204, 0.71832, 0.59202],
+      "review_status": "pending_human_review",
+      "group": "type_of_service",
+      "label": "Skilled nursing facility",
+      "state": "unchecked"
+    },
+    {
+      "id": "p2-checkbox-service-long-term-care",
+      "page": 2,
+      "bbox": [0.06172, 0.59302, 0.07420, 0.60200],
+      "review_status": "pending_human_review",
+      "group": "type_of_service",
+      "label": "Long-term services & supports/long-term care",
+      "state": "unchecked"
+    },
+    {
+      "id": "p2-checkbox-service-home-health",
+      "page": 2,
+      "bbox": [0.42088, 0.59451, 0.43401, 0.60449],
+      "review_status": "pending_human_review",
+      "group": "type_of_service",
+      "label": "Home health",
+      "state": "unchecked"
+    },
+    {
+      "id": "p2-checkbox-service-durable-medical-equipment",
+      "page": 2,
+      "bbox": [0.06172, 0.60848, 0.07420, 0.61845],
+      "review_status": "pending_human_review",
+      "group": "type_of_service",
+      "label": "Durable medical equipment",
+      "state": "unchecked"
+    },
+    {
+      "id": "p2-checkbox-service-diagnostic-study",
+      "page": 2,
+      "bbox": [0.31648, 0.60998, 0.32896, 0.61995],
+      "review_status": "pending_human_review",
+      "group": "type_of_service",
+      "label": "Diagnostic study",
+      "state": "unchecked"
+    },
+    {
+      "id": "p2-checkbox-service-hospice",
+      "page": 2,
+      "bbox": [0.50099, 0.61097, 0.51412, 0.62095],
+      "review_status": "pending_human_review",
+      "group": "type_of_service",
+      "label": "Hospice",
+      "state": "unchecked"
+    },
+    {
+      "id": "p2-checkbox-service-office-visit",
+      "page": 2,
+      "bbox": [0.62114, 0.61197, 0.63362, 0.62244],
+      "review_status": "pending_human_review",
+      "group": "type_of_service",
+      "label": "Office visit",
+      "state": "checked"
+    },
+    {
+      "id": "p2-checkbox-service-personal-care",
+      "page": 2,
+      "bbox": [0.75181, 0.61347, 0.76428, 0.62394],
+      "review_status": "pending_human_review",
+      "group": "type_of_service",
+      "label": "Personal care services",
+      "state": "unchecked"
+    },
+    {
+      "id": "p2-checkbox-service-other",
+      "page": 2,
+      "bbox": [0.06172, 0.62394, 0.07354, 0.63392],
+      "review_status": "pending_human_review",
+      "group": "type_of_service",
+      "label": "Other",
+      "state": "unchecked"
+    },
+    {
+      "id": "p2-checkbox-place-hospital",
+      "page": 2,
+      "bbox": [0.16743, 0.64090, 0.18056, 0.65087],
+      "review_status": "pending_human_review",
+      "group": "place_of_service",
+      "label": "Hospital",
+      "state": "unchecked"
+    },
+    {
+      "id": "p2-checkbox-place-ambulatory-surgery",
+      "page": 2,
+      "bbox": [0.29481, 0.64140, 0.30795, 0.65137],
+      "review_status": "pending_human_review",
+      "group": "place_of_service",
+      "label": "Ambulatory surgery center",
+      "state": "unchecked"
+    },
+    {
+      "id": "p2-checkbox-place-office",
+      "page": 2,
+      "bbox": [0.54498, 0.64339, 0.55811, 0.65387],
+      "review_status": "pending_human_review",
+      "group": "place_of_service",
+      "label": "Office",
+      "state": "checked"
+    },
+    {
+      "id": "p2-checkbox-place-home",
+      "page": 2,
+      "bbox": [0.65397, 0.64389, 0.66645, 0.65387],
+      "review_status": "pending_human_review",
+      "group": "place_of_service",
+      "label": "Home",
+      "state": "unchecked"
+    },
+    {
+      "id": "p2-checkbox-place-independent-lab",
+      "page": 2,
+      "bbox": [0.76625, 0.64489, 0.77938, 0.65486],
+      "review_status": "pending_human_review",
+      "group": "place_of_service",
+      "label": "Independent lab",
+      "state": "unchecked"
+    },
+    {
+      "id": "p2-checkbox-place-nursing-facility",
+      "page": 2,
+      "bbox": [0.06435, 0.65586, 0.07682, 0.66584],
+      "review_status": "pending_human_review",
+      "group": "place_of_service",
+      "label": "Nursing facility",
+      "state": "unchecked"
+    },
+    {
+      "id": "p2-checkbox-place-other",
+      "page": 2,
+      "bbox": [0.23047, 0.65686, 0.24294, 0.66683],
+      "review_status": "pending_human_review",
+      "group": "place_of_service",
+      "label": "Other",
+      "state": "unchecked"
+    }
+  ],
+  "rejected_checkbox_candidates": [
+    {
+      "id": "p2-rejected-oracle-empty-cell-full-name",
+      "page": 2,
+      "source": "LandingAI servicing-provider table row 2 middle cell",
+      "reason": "The source raster contains no checkbox control at this table cell.",
+      "review_status": "pending_human_review"
+    },
+    {
+      "id": "p2-rejected-oracle-empty-cell-npi",
+      "page": 2,
+      "source": "LandingAI servicing-provider table row 3 middle cell",
+      "reason": "The source raster contains no checkbox control at this table cell.",
+      "review_status": "pending_human_review"
+    },
+    {
+      "id": "p2-rejected-oracle-empty-cell-office-contact",
+      "page": 2,
+      "source": "LandingAI servicing-provider table row 4 middle cell",
+      "reason": "The source raster contains no checkbox control at this table cell.",
+      "review_status": "pending_human_review"
+    },
+    {
+      "id": "p2-rejected-oracle-empty-cell-address",
+      "page": 2,
+      "source": "LandingAI servicing-provider table row 5 middle cell",
+      "reason": "The source raster contains no checkbox control at this table cell.",
+      "review_status": "pending_human_review"
+    }
+  ],
+  "notes": [
+    "The 25 visible source controls comprise 6 provider controls, 12 type-of-service controls, and 7 place-of-service controls.",
+    "Six controls are visibly checked; nineteen are visibly unchecked.",
+    "LandingAI's 28 Markdown checkbox markers are not a human checkbox count: four empty table cells are rendered as unchecked markers, and one visible checked provider control is rendered as plain X.",
+    "Table labels intentionally omit document values and personal data; they evaluate object localization and grid structure only."
+  ]
+}

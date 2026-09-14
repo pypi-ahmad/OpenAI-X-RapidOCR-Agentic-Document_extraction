@@ -15,7 +15,7 @@ from agentic_extractor.models import (
 )
 from agentic_extractor.ocr import EngineProvenance, LocalParseResult
 from agentic_extractor.parse import PageParse
-from agentic_extractor.ui_state import AppState
+from agentic_extractor.ui_state import AppState, output_file_name
 from agentic_extractor.workflow import AgentWorkflowResult, ReviewItem, WorkflowState
 
 
@@ -37,10 +37,37 @@ def test_ui_exposes_every_required_application_state() -> None:
     }
 
 
+def test_output_file_names_preserve_original_file_stem() -> None:
+    source = "Masked_Amerigroup_RealSolutions_1.pdf"
+
+    assert output_file_name(source, ".md") == "Masked_Amerigroup_RealSolutions_1.md"
+    assert output_file_name(source, ".parse.json") == (
+        "Masked_Amerigroup_RealSolutions_1.parse.json"
+    )
+    assert output_file_name(source, ".annotated.pdf") == (
+        "Masked_Amerigroup_RealSolutions_1.annotated.pdf"
+    )
+    assert output_file_name(source, ".html") == "Masked_Amerigroup_RealSolutions_1.html"
+    assert output_file_name(source, ".zip") == "Masked_Amerigroup_RealSolutions_1.zip"
+
+    app_source = (Path(__file__).parents[1] / "streamlit_app.py").read_text(encoding="utf-8")
+    html_page_source = (Path(__file__).parents[1] / "app_pages" / "html.py").read_text(
+        encoding="utf-8"
+    )
+    for suffix in (".md", ".parse.json", ".annotated.pdf", ".html", ".zip"):
+        assert f'output_file_name(source_file_name, "{suffix}")' in app_source
+    assert 'output_file_name(name, ".html")' in html_page_source
+
+
 def test_processing_progress_bar_displays_numeric_percentages() -> None:
     source = (Path(__file__).parents[1] / "streamlit_app.py").read_text(encoding="utf-8")
     assert 'st.progress(0, text="0% — Preparing extraction")' in source
-    assert 'progress.progress(35, text="35% — Running RapidOCR and GPT refinement")' in source
+    assert (
+        'progress.progress(35, text="35% — Running OCR, reading order, and table structure")'
+        in source
+    )
+    assert 'cost_row.metric("PP-DocLayoutV3 API cost", "$0.00")' in source
+    assert 'cost_row.metric("Table structure API cost", "$0.00")' in source
     assert 'progress.progress(100, text=f"100% — {final_state.value}")' in source
 
 
@@ -48,6 +75,17 @@ def test_annotated_pdf_uses_native_viewer_instead_of_blocked_data_url() -> None:
     source = (Path(__file__).parents[1] / "streamlit_app.py").read_text(encoding="utf-8")
     assert "st.pdf(st.session_state.artifacts.annotated_pdf" in source
     assert "data:application/pdf" not in source
+
+
+def test_expensive_artifacts_are_requested_lazily() -> None:
+    source = (Path(__file__).parents[1] / "streamlit_app.py").read_text(encoding="utf-8")
+
+    assert 'on_change="rerun"' in source
+    assert "if pdf_tab.open:" in source
+    assert source.count("prepare_lazy_download(") == 3
+    assert '"document.html"' in source
+    assert '"bundle.zip"' in source
+    assert "build_local_bundle(result)" not in source
 
 
 def test_ui_has_no_cloud_consent_control() -> None:
@@ -58,6 +96,17 @@ def test_ui_has_no_cloud_consent_control() -> None:
     assert all("consent" not in checkbox.label.lower() for checkbox in app.checkbox)
     extract = next(button for button in app.button if button.label == "Extract document")
     assert extract.disabled is True
+
+
+def test_ui_exposes_atomic_grounding_json_control_enabled_by_default() -> None:
+    app = AppTest.from_file(
+        Path(__file__).parents[1] / "streamlit_app.py", default_timeout=20
+    ).run()
+
+    control = next(checkbox for checkbox in app.checkbox if checkbox.label == "Atomic grounding")
+    assert control.value is True
+    source = (Path(__file__).parents[1] / "streamlit_app.py").read_text(encoding="utf-8")
+    assert "Include atomic grounding parts array in JSON response." in source
 
 
 def test_parse_is_always_enabled_and_other_workflows_are_optional() -> None:
@@ -80,14 +129,28 @@ def test_ui_reports_engine_configuration_without_exposing_key(
 ) -> None:
     secret = "test-secret-must-not-render"
     monkeypatch.setenv("OPENAI_API_KEY", secret)
-    app = AppTest.from_file(
-        Path(__file__).parents[1] / "streamlit_app.py", default_timeout=20
-    ).run()
+    app = AppTest.from_file(Path(__file__).parents[1] / "app.py", default_timeout=20).run()
+    app.switch_page("app_pages/diagnostics.py").run()
     assert not app.exception
     visible = " ".join(item.value for item in [*app.success, *app.error, *app.caption])
     assert "OpenAI API configured" in visible
     assert "RapidOCR installed" in visible
     assert secret not in visible
+
+
+def test_processing_warnings_are_only_shown_once_on_diagnostics_page() -> None:
+    app = AppTest.from_file(Path(__file__).parents[1] / "app.py", default_timeout=20).run()
+    warning = "Table p2-l7-table requires review."
+    app.session_state["result"] = SimpleNamespace(
+        warnings=[warning, warning, warning],
+        failed_pages=[],
+        engine=None,
+        timings={},
+    )
+
+    app.switch_page("app_pages/diagnostics.py").run()
+
+    assert [item.value for item in app.warning] == [f"{warning} (recorded 3 times)"]
 
 
 def test_same_upload_preserves_completed_state_across_reruns() -> None:
@@ -168,7 +231,19 @@ def test_usage_panel_shows_current_and_cumulative_session_totals() -> None:
         usage=current_usage,
         effective_mode=ProcessingMode.BALANCED,
         cloud_image_pages=[],
-        timings={"ocr_seconds": 0.5},
+        timings={
+            "ocr_seconds": 0.5,
+            "ocr_wall_seconds": 0.5,
+            "layout_detection_seconds": 0.2,
+            "gpt_refinement_seconds": 1.5,
+        },
+        adaptive_processing={
+            "actual_workers": 1,
+            "ocr_cache_hits": 1,
+            "ocr_cache_misses": 0,
+            "ocr_cached_seconds_avoided": 0.25,
+            "render_cache": {"hits": 1, "misses": 0},
+        },
     )
     app.session_state["artifacts"] = SimpleNamespace(
         annotated_pdf=b"%PDF",
@@ -191,11 +266,25 @@ def test_usage_panel_shows_current_and_cumulative_session_totals() -> None:
     ]
     app.run()
 
+    assert [tab.label for tab in app.tabs] == [
+        "Source preview",
+        "Rendered Markdown",
+        "Raw Markdown",
+        "Annotated PDF",
+        "Grounded blocks",
+        "Artifact metadata",
+        "Usage",
+    ]
     metrics = {metric.label: metric.value for metric in app.metric}
     assert metrics["Session GPT calls"] == "3"
     assert metrics["Session total tokens"] == "360"
     assert metrics["Current GPT calls"] == "2"
     assert metrics["RapidOCR API cost"] == "$0.00"
+    assert metrics["Slowest stage"] == "GPT parse refinement"
+    assert metrics["Stage time"] == "1.500s"
+    assert any("rendered pages: 1 hit / 0 miss" in caption.value for caption in app.caption)
+    timing_table = next(frame.value for frame in app.dataframe if "share_percent" in frame.value)
+    assert timing_table["stage"][0] == "GPT parse refinement"
     call_table = next(frame.value for frame in app.dataframe if "context_kind" in frame.value)
     assert call_table["context_kind"][0] == "parse"
     assert call_table["evidence_characters"][0] == 50

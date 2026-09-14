@@ -38,8 +38,25 @@ def _png() -> str:
     return base64.b64encode(output.getvalue()).decode()
 
 
-def test_api_validates_submit_and_exposes_opaque_job_status() -> None:
-    client = TestClient(create_app(refiner=FakeRefiner()))
+def test_api_validates_submit_and_exposes_opaque_job_status(layout_resource) -> None:
+    class Engine:
+        def __call__(self, image, *, return_word_box):
+            return SimpleNamespace(
+                boxes=[[[1, 1], [20, 1], [20, 10], [1, 10]]],
+                txts=["Document text"],
+                scores=[0.99],
+                elapse_list=[],
+                word_results=[],
+                elapse=0.01,
+            )
+
+    client = TestClient(
+        create_app(
+            ocr_resource=OCRResource(Engine(), "CPU"),
+            layout_resource=layout_resource,
+            refiner=FakeRefiner(),
+        )
+    )
     bad = client.post("/api/v1/jobs/parse", json={"file_name": "x.png", "content_base64": "!"})
     assert bad.status_code == 422
     response = client.post(
@@ -48,6 +65,7 @@ def test_api_validates_submit_and_exposes_opaque_job_status() -> None:
             "file_name": "x.png",
             "content_base64": _png(),
             "mode": "Balanced",
+            "include_atomic_grounding": False,
         },
     )
     assert response.status_code == 201
@@ -56,9 +74,14 @@ def test_api_validates_submit_and_exposes_opaque_job_status() -> None:
     status = client.get(f"/api/v1/jobs/{job_id}")
     assert status.status_code == 200
     body = status.json()
-    assert body["state"] in {"ACCEPTED", "REVIEW_REQUIRED"}
-    assert body["result"]["selected_pages"] == [1]
+    assert body["error"] is None, body["error"]
+    assert body["state"] in {"ACCEPTED", "REVIEW_REQUIRED"}, body
+    assert body["result"]["structure"]["children"][0]["grounding"]["page"] == 1
+    assert "atomic_grounding" not in json.dumps(body["result"])
+    assert body["result"]["metadata"]["range_units"] == "unicode_codepoints"
     assert "content_base64" not in status.text
+    request_schema = client.get("/openapi.json").json()["components"]["schemas"]["ParseJobRequest"]
+    assert request_schema["properties"]["include_atomic_grounding"]["default"] is True
 
 
 def test_api_unknown_jobs_and_invalid_schema_have_clear_errors() -> None:
@@ -163,6 +186,66 @@ def test_api_rapidocr_setup_error_is_actionable(monkeypatch) -> None:
     assert "uv sync --all-groups" in detail["action"]
 
 
+def test_api_pp_doclayout_setup_error_is_actionable(monkeypatch) -> None:
+    def unavailable():
+        raise RuntimeError("Paddle model unavailable")
+
+    monkeypatch.setattr("agentic_extractor.api.create_pp_doclayout_engine", unavailable)
+    client = TestClient(
+        create_app(ocr_resource=OCRResource(object(), "CPU"), refiner=FakeRefiner())
+    )
+    response = client.post(
+        "/api/v1/jobs/parse",
+        json={"file_name": "x.png", "content_base64": _png()},
+    )
+
+    assert response.status_code == 503
+    detail = response.json()["detail"]
+    assert detail["code"] == "pp_doclayout_unavailable"
+    assert "tools/pp_doclayout" in detail["action"]
+
+
+def test_api_keeps_ocr_and_layout_resources_warm_across_jobs(monkeypatch, layout_resource) -> None:
+    class Engine:
+        calls = 0
+
+        def __call__(self, image, *, return_word_box):
+            self.calls += 1
+            return SimpleNamespace(
+                boxes=[[[1, 1], [20, 1], [20, 10], [1, 10]]],
+                txts=["Document text"],
+                scores=[0.99],
+                elapse_list=[],
+                word_results=[],
+                elapse=0.01,
+            )
+
+    engine = Engine()
+    creations = {"ocr": 0, "layout": 0}
+
+    def create_ocr() -> OCRResource:
+        creations["ocr"] += 1
+        return OCRResource(engine, "CPU")
+
+    def create_layout():
+        creations["layout"] += 1
+        return layout_resource
+
+    monkeypatch.setattr("agentic_extractor.api.create_rapidocr_engine", create_ocr)
+    monkeypatch.setattr("agentic_extractor.api.create_pp_doclayout_engine", create_layout)
+    client = TestClient(create_app(refiner=FakeRefiner()))
+
+    for run in (1, 2):
+        response = client.post(
+            "/api/v1/jobs/parse",
+            json={"file_name": f"x-{run}.png", "content_base64": _png()},
+        )
+        assert response.status_code == 201
+
+    assert creations == {"ocr": 1, "layout": 1}
+    assert engine.calls == 2
+
+
 def test_api_processing_failure_is_retained_as_typed_job_error() -> None:
     class FailingRefiner(FakeRefiner):
         def refine(self, *args, **kwargs):
@@ -221,12 +304,28 @@ def test_api_exposes_typed_artifact_metadata_and_download_headers() -> None:
         "document.html",
         "bundle.zip",
     }
-    assert all(item["bytes"] > 0 for item in artifacts)
+    by_name = {item["name"]: item for item in artifacts}
+    assert by_name["document.md"]["generated"] is True
+    assert by_name["parse-result.json"]["generated"] is True
+    assert by_name["annotated.pdf"]["generated"] is False
+    assert by_name["document.html"]["generated"] is False
+    assert by_name["bundle.zip"]["generated"] is False
+    assert by_name["annotated.pdf"]["bytes"] is None
     assert all(item["download_url"].startswith(f"/api/v1/jobs/{job_id}/") for item in artifacts)
 
     download = client.get(f"/api/v1/jobs/{job_id}/artifacts/document.md")
     assert download.status_code == 200
     assert download.headers["content-disposition"] == 'attachment; filename="document.md"'
+
+    pdf = client.get(f"/api/v1/jobs/{job_id}/artifacts/annotated.pdf")
+    assert pdf.status_code == 200
+    refreshed = {
+        item["name"]: item
+        for item in client.get(f"/api/v1/jobs/{job_id}/artifacts").json()["artifacts"]
+    }
+    assert refreshed["annotated.pdf"]["generated"] is True
+    assert refreshed["annotated.pdf"]["bytes"] == len(pdf.content)
+    assert refreshed["document.html"]["generated"] is False
 
 
 def test_extract_reuses_the_canonical_parse_without_rerunning_rapidocr() -> None:
@@ -388,7 +487,7 @@ def test_mocked_dual_engine_api_flow_exports_audited_bundle() -> None:
             "manifest.json",
         }
         manifest = json.loads(archive.read("manifest.json"))
-    assert manifest["manifest_version"] == 3
+    assert manifest["manifest_version"] == 7
     assert manifest["agent_workflow"]["current_state"] == "ACCEPTED"
     assert manifest["processing"]["gpt_model"] == "gpt-5.6-luna"
     assert manifest["processing"]["reasoning_effort"] == "medium"

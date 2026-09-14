@@ -11,3 +11,9 @@ artifacts/
 .firecrawl/
 .planning/tmp/
 dist/
+data/
+LandingAI Output/
+Our App Output/
+Masked_Amerigroup_RealSolutions_1.pdf
+validation-output/
+
