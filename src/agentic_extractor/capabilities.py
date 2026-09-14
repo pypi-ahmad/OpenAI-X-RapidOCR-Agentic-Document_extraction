@@ -133,6 +133,8 @@ def _structured_value(value: Any, field_schema: dict[str, Any]) -> Any:
 
 
 def _valid_splits(splits: list[Split], page_count: int, warnings: list[str]) -> list[Split]:
+    # Contiguity invariant: document splits must form a complete, non-overlapping
+    # partition of pages from 1 to page_count. Any gap or overlap discards the whole proposal.
     ordered = sorted(splits, key=lambda item: item.page_start)
     if not ordered:
         return []

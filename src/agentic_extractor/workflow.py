@@ -504,6 +504,8 @@ def _merge_repair(
     repair_items: list[ReviewItem] | None = None,
 ) -> CloudResult:
     """Replace only identified repair objects; raw OCR remains outside this layer."""
+    # Targeted repair invariant: only items explicitly targeted by review_items
+    # are replaced; all unflagged extractions and accepted structures are preserved.
     merged = original.model_copy(deep=True)
     targets = _repair_targets(repair_items or [])
     merged.reviewed_pages = list(

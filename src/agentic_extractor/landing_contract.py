@@ -124,6 +124,8 @@ def _page_node(
         else:
             node_type = _semantic_type(page, chunk.source_block_ids, chunk.type)
             region_id = _primary_region_id(page, chunk.source_block_ids)
+            # Layout region coalescing: merge adjacent chunks from the same detector
+            # region and semantic type into a unified structural node.
             if (
                 region_id is not None
                 and children

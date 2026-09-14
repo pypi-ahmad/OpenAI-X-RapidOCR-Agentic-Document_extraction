@@ -172,6 +172,8 @@ def _accepted_refinements(page: PageParse, refinements: list[RefinementRecord]) 
 
 
 def _ordered_blocks(page: PageParse) -> list[Block]:
+    # Reading order preservation: sequence blocks according to layout reading order,
+    # then append any unmapped blocks to ensure no OCR text is omitted.
     by_id = {block.id: block for block in page.blocks}
     ids = page.reading_order_evidence.ordered_block_ids if page.reading_order_evidence else []
     ordered = [by_id[item] for item in ids if item in by_id]
