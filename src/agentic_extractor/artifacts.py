@@ -1,50 +1,195 @@
-"""Local Parse artifact generation from source images and grounded OCR evidence."""
+"""Local Parse artifact generation from source images and grounded OCR evidence.
+
+Builds the cheap artifacts (Markdown, Parse JSON, manifest, checkbox crops) eagerly in
+`build_local_artifacts`, and exposes lazy, generate-once-under-lock access to the expensive
+ones (annotated PDF, coordinate HTML, ZIP) via `LocalArtifacts`. Must not mutate
+`LocalParseResult` or any raw OCR block, and must not generate a lazy artifact just because
+its metadata was inspected. See `landing_contract.py` for the public Parse JSON this composes
+and `layout_html.py` for the embedded HTML viewer.
+"""
 
 from __future__ import annotations
 
+import copy
 import hashlib
-import html
 import io
 import json
 import re
+import threading
+import time
 import zipfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from html.parser import HTMLParser
-from typing import Any
+from typing import Any, TypedDict
 
-from markdown_it import MarkdownIt
 from PIL import Image, ImageDraw
 
 from agentic_extractor.costs import rate_assumptions
+from agentic_extractor.landing_contract import build_landing_parse
+from agentic_extractor.layout_html import build_coordinate_html, coordinate_html_page_images
 from agentic_extractor.ocr import LocalParseResult
-from agentic_extractor.parse import build_layout_chunks
+from agentic_extractor.parse import (
+    document_markdown,
+    document_markdown_with_checkboxes,
+    is_publishable_checkbox,
+)
+from agentic_extractor.timing import record_stage_timing, stage_timing_summary
 
 _PAGE_MARKER_PATTERN = re.compile(r"<!--\s*page\s*:?\s*(\d+)\s*-->", re.IGNORECASE)
 _HTML_TABLE_PATTERN = re.compile(r"<table\b[^>]*>.*?</table>", re.IGNORECASE | re.DOTALL)
 
 
-@dataclass(frozen=True, slots=True)
+class ArtifactMetadataValue(TypedDict):
+    name: str
+    bytes: int | None
+    sha256: str | None
+    generated: bool
+
+
+@dataclass(slots=True)
 class LocalArtifacts:
     markdown: bytes
     parse_result: bytes
-    annotated_pdf: bytes
-    html: bytes
     manifest: dict[str, Any]
     checkbox_crops: dict[str, bytes]
+    _result: LocalParseResult = field(repr=False)
+    _annotated_pdf_bytes: bytes | None = field(default=None, init=False, repr=False)
+    _html_bytes: bytes | None = field(default=None, init=False, repr=False)
+    _bundle_bytes: bytes | None = field(default=None, init=False, repr=False)
+    _lock: Any = field(default_factory=threading.RLock, init=False, repr=False)
+
+    # The three properties below generate their bytes exactly once, on first access, under
+    # `_lock`. This is the concurrency invariant for this class: two callers racing to read
+    # `annotated_pdf`/`html`/`bundle` for the same result must not double-generate or observe
+    # a half-written manifest entry. Once `_*_bytes` is set it is never recomputed, so the
+    # generated artifact is stable for the lifetime of this instance even if the underlying
+    # `LocalParseResult` were (incorrectly) mutated afterward.
+    @property
+    def annotated_pdf(self) -> bytes:
+        with self._lock:
+            if self._annotated_pdf_bytes is None:
+                started = time.perf_counter()
+                self._annotated_pdf_bytes = _annotated_pdf(self._result)
+                record_stage_timing(
+                    self._result.timings,
+                    "annotated_pdf_generation_seconds",
+                    time.perf_counter() - started,
+                )
+                self.manifest["artifacts"]["annotated_pdf"] = _artifact_entry(
+                    "annotated.pdf", self._annotated_pdf_bytes
+                )
+                self._refresh_timing_analysis()
+            return self._annotated_pdf_bytes
+
+    @property
+    def html(self) -> bytes:
+        with self._lock:
+            if self._html_bytes is None:
+                started = time.perf_counter()
+                self._html_bytes = build_coordinate_html(self._result).encode("utf-8")
+                self.manifest["html_layout"]["page_images"] = coordinate_html_page_images(
+                    self._result
+                )
+                record_stage_timing(
+                    self._result.timings,
+                    "html_generation_seconds",
+                    time.perf_counter() - started,
+                )
+                self.manifest["artifacts"]["html"] = _artifact_entry(
+                    "document.html", self._html_bytes
+                )
+                self._refresh_timing_analysis()
+            return self._html_bytes
+
+    @property
+    def bundle(self) -> bytes:
+        with self._lock:
+            if self._bundle_bytes is None:
+                annotated_pdf = self.annotated_pdf
+                html = self.html
+                started = time.perf_counter()
+                output = io.BytesIO()
+                with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
+                    archive.writestr("document.md", self.markdown)
+                    archive.writestr("parse-result.json", self.parse_result)
+                    archive.writestr("annotated.pdf", annotated_pdf)
+                    archive.writestr("document.html", html)
+                    for name, data in self.checkbox_crops.items():
+                        archive.writestr(name, data)
+                    record_stage_timing(
+                        self._result.timings,
+                        "zip_packaging_seconds",
+                        time.perf_counter() - started,
+                    )
+                    self._refresh_timing_analysis()
+                    archive.writestr("manifest.json", json.dumps(self.manifest, indent=2))
+                self._bundle_bytes = output.getvalue()
+            return self._bundle_bytes
+
+    def _refresh_timing_analysis(self) -> None:
+        self.manifest["timing_analysis"] = stage_timing_summary(self._result.timings)
+
+    def artifact_metadata(self, name: str) -> ArtifactMetadataValue:
+        """Return metadata without forcing a lazy artifact to be generated."""
+        values = {
+            "document.md": self.markdown,
+            "parse-result.json": self.parse_result,
+            "annotated.pdf": self._annotated_pdf_bytes,
+            "document.html": self._html_bytes,
+            "bundle.zip": self._bundle_bytes,
+        }
+        if name not in values:
+            raise KeyError(name)
+        data = values[name]
+        return _artifact_entry(name, data) if data is not None else _pending_artifact_entry(name)
+
+    def get(self, name: str) -> bytes:
+        """Generate and return one allowlisted artifact."""
+        if name == "document.md":
+            return self.markdown
+        if name == "parse-result.json":
+            return self.parse_result
+        if name == "annotated.pdf":
+            return self.annotated_pdf
+        if name == "document.html":
+            return self.html
+        if name == "bundle.zip":
+            return self.bundle
+        raise KeyError(name)
 
 
-def build_local_artifacts(result: LocalParseResult) -> LocalArtifacts:
+def build_local_artifacts(
+    result: LocalParseResult, *, include_atomic_grounding: bool = True
+) -> LocalArtifacts:
     """Generate selected-page-only Markdown, annotated PDF, HTML, and manifest."""
-    markdown = result.markdown.encode("utf-8")
-    parse_result = json.dumps(_structured_parse(result), indent=2).encode("utf-8")
-    annotated_pdf = _annotated_pdf(result)
-    standalone_html = _standalone_html(result).encode("utf-8")
+    started = time.perf_counter()
+    export_result = _synchronize_accepted_tables(result)
+    structured_parse = _structured_parse(
+        export_result, include_atomic_grounding=include_atomic_grounding
+    )
+    expected_tables = sum(
+        table.status == "valid" and not table.review_required and bool(table.markdown)
+        for page in export_result.pages
+        for table in page.table_structures
+    )
+    exported_tables = sum(
+        child.get("type") == "table"
+        for page in structured_parse["structure"]["children"]
+        for child in page.get("children", [])
+    )
+    if exported_tables != expected_tables:
+        raise ValueError(
+            "Artifact table integrity failed: "
+            f"{expected_tables} accepted tables but {exported_tables} serialized tables."
+        )
+    markdown = structured_parse["markdown"].encode("utf-8")
+    parse_result = json.dumps(structured_parse, indent=2).encode("utf-8")
     checkbox_crops = _checkbox_crops(result)
     artifacts = {
         "markdown": _artifact_entry("document.md", markdown),
         "parse_result": _artifact_entry("parse-result.json", parse_result),
-        "annotated_pdf": _artifact_entry("annotated.pdf", annotated_pdf),
-        "html": _artifact_entry("document.html", standalone_html),
+        "annotated_pdf": _pending_artifact_entry("annotated.pdf"),
+        "html": _pending_artifact_entry("document.html"),
         "checkbox_crops": {
             name: _artifact_entry(name, data) for name, data in checkbox_crops.items()
         },
@@ -53,6 +198,7 @@ def build_local_artifacts(result: LocalParseResult) -> LocalArtifacts:
         "requested_mode": result.requested_mode.value,
         "effective_mode": result.effective_mode.value,
         "routing": result.routing,
+        "atomic_grounding_included": include_atomic_grounding,
     }
     usage_and_cost: dict[str, Any] = {
         "rapidocr": {
@@ -61,6 +207,17 @@ def build_local_artifacts(result: LocalParseResult) -> LocalArtifacts:
             "hardware_cost_usd": None,
         }
     }
+    if result.layout_engine is not None:
+        usage_and_cost["pp_doclayout_v3"] = {
+            "processing_seconds": result.timings.get("layout_seconds"),
+            "api_cost_usd": 0.0,
+            "hardware_cost_usd": None,
+        }
+        usage_and_cost["table_structure"] = {
+            "processing_seconds": result.timings.get("table_structure_seconds"),
+            "api_cost_usd": 0.0,
+            "hardware_cost_usd": None,
+        }
     has_gpt = result.cloud_output is not None or result.usage.call_count > 0
     if has_gpt:
         processing.update(
@@ -73,7 +230,7 @@ def build_local_artifacts(result: LocalParseResult) -> LocalArtifacts:
         )
         usage_and_cost["gpt"] = result.usage.model_dump(mode="json")
     manifest = {
-        "manifest_version": 3,
+        "manifest_version": 7,
         "source": result.document_metadata,
         "selected_pages": result.selected_pages,
         "selected_page_range": {
@@ -87,9 +244,20 @@ def build_local_artifacts(result: LocalParseResult) -> LocalArtifacts:
             "confidence_calibrated": result.engine.confidence_calibrated,
             "model_metadata": result.engine.model_metadata,
         },
+        "layout_engine": (
+            {
+                "name": result.layout_engine.name,
+                "version": result.layout_engine.version,
+                "device": result.layout_engine.device,
+                "model_metadata": result.layout_engine.model_metadata,
+            }
+            if result.layout_engine
+            else None
+        ),
         "timings": result.timings,
         "quality_diagnostics": result.quality_diagnostics,
         "adaptive_processing": result.adaptive_processing,
+        "visual_routing": result.visual_routing,
         "processing": processing,
         "usage_and_cost": usage_and_cost,
         "agent_workflow": result.workflow_manifest,
@@ -103,97 +271,63 @@ def build_local_artifacts(result: LocalParseResult) -> LocalArtifacts:
         "warnings": result.warnings,
         "failed_pages": result.failed_pages,
         "pages": _page_manifest(result),
+        "html_layout": {
+            "renderer_version": 1,
+            "coordinate_space": "normalized_page_xyxy",
+            "page_background": "ocr_aligned_lossless_png",
+            "selected_pages": result.selected_pages,
+            "self_contained": True,
+            "text_layers": ["refined", "raw"],
+            "page_images": [],
+        },
         "artifacts": artifacts,
     }
     if has_gpt:
         manifest["gpt_rate_assumptions"] = rate_assumptions()
-    return LocalArtifacts(
-        markdown, parse_result, annotated_pdf, standalone_html, manifest, checkbox_crops
+    local_artifacts = LocalArtifacts(markdown, parse_result, manifest, checkbox_crops, result)
+    record_stage_timing(
+        result.timings, "artifact_finalization_seconds", time.perf_counter() - started
     )
+    local_artifacts._refresh_timing_analysis()
+    return local_artifacts
 
 
-def build_local_bundle(result: LocalParseResult) -> bytes:
-    artifacts = build_local_artifacts(result)
-    output = io.BytesIO()
-    with zipfile.ZipFile(output, "w", zipfile.ZIP_DEFLATED) as archive:
-        archive.writestr("document.md", artifacts.markdown)
-        archive.writestr("parse-result.json", artifacts.parse_result)
-        archive.writestr("annotated.pdf", artifacts.annotated_pdf)
-        archive.writestr("document.html", artifacts.html)
-        for name, data in artifacts.checkbox_crops.items():
-            archive.writestr(name, data)
-        archive.writestr("manifest.json", json.dumps(artifacts.manifest, indent=2))
-    return output.getvalue()
-
-
-def _structured_parse(result: LocalParseResult) -> dict[str, Any]:
-    blocks = [
-        _canonical_block(block, order, result.engine.confidence_calibrated)
+def _synchronize_accepted_tables(result: LocalParseResult) -> LocalParseResult:
+    # Table review (Luna audit) can accept or reject a table's structure after
+    # `result.markdown` was first assembled, so the stored Markdown can under-count how many
+    # times a currently-accepted table's HTML actually appears. When that happens, rebuild
+    # Markdown from the pages (which reflect the current accepted/rejected state) instead of
+    # exporting a canonical result whose accepted tables and rendered Markdown have drifted
+    # apart. `result` itself is left untouched; only the copy returned here changes.
+    accepted_markup = [
+        table.markdown
         for page in result.pages
-        for order, block in enumerate(page.blocks, 1)
+        for table in page.table_structures
+        if table.status == "valid" and not table.review_required and table.markdown
     ]
-    chunks = [
-        _canonical_chunk(chunk)
-        for page in result.pages
-        for chunk in (page.chunks or build_layout_chunks(page.blocks))
-    ]
-    return {
-        "contract_version": 3,
-        "document_metadata": result.document_metadata,
-        "selected_pages": result.selected_pages,
-        "markdown": result.markdown,
-        "engine": {
-            "name": result.engine.name,
-            "version": result.engine.version,
-            "device": result.engine.device,
-            "confidence_calibrated": result.engine.confidence_calibrated,
-            "model_metadata": result.engine.model_metadata,
-        },
-        "timings": result.timings,
-        "warnings": result.warnings,
-        "failed_pages": result.failed_pages,
-        "ocr_attempts": result.ocr_attempts,
-        "gpt_attempts": result.cloud_attempts,
-        "refinement_layer": [item.model_dump(mode="json") for item in result.refinements],
-        "checkboxes": [item.model_dump(mode="json") for item in result.checkboxes],
-        "checkbox_corrections": [
-            item.model_dump(mode="json") for item in result.checkbox_corrections
-        ],
-        "pages": [
-            {
-                "source_page": page.page,
-                "width": page.width,
-                "height": page.height,
-                "status": page.status,
-                "blocks": [
-                    _canonical_block(block, order, result.engine.confidence_calibrated)
-                    for order, block in enumerate(page.blocks, 1)
-                ],
-                "raw_evidence": page.raw_evidence,
-                "layout_signals": page.layout_signals,
-                "timings": {
-                    "ocr_seconds": page.ocr_seconds,
-                    "engine_seconds": page.engine_elapsed_seconds,
-                    "stages": page.stage_timings,
-                },
-                "warnings": page.warnings,
-            }
-            for page in result.pages
-        ],
-        "chunks": chunks,
-        "coordinate_spaces": {
-            "bbox": "normalized_page_xyxy",
-            "polygon": "source_page_pixels",
-        },
-        "grounding": {
-            item["source_id"]: {
-                "page": item["page"],
-                "bbox": item["bbox"],
-                "polygon": item.get("polygon"),
-            }
-            for item in [*blocks, *chunks]
-        },
-    }
+    missing = any(
+        result.markdown.count(markup) < accepted_markup.count(markup)
+        for markup in set(accepted_markup)
+    )
+    if not missing:
+        return result
+    synchronized = copy.copy(result)
+    synchronized.markdown = (
+        document_markdown_with_checkboxes(result.pages, result.checkboxes)
+        if result.checkboxes
+        else document_markdown(result.pages)
+    )
+    return synchronized
+
+
+def build_local_bundle(result: LocalParseResult, *, include_atomic_grounding: bool = True) -> bytes:
+    return build_local_artifacts(result, include_atomic_grounding=include_atomic_grounding).bundle
+
+
+def _structured_parse(
+    result: LocalParseResult, *, include_atomic_grounding: bool = True
+) -> dict[str, Any]:
+    return build_landing_parse(result, include_atomic_grounding=include_atomic_grounding)
 
 
 def _canonical_block(block: Any, reading_order: int, calibrated: bool) -> dict[str, Any]:
@@ -231,19 +365,59 @@ def _canonical_chunk(chunk: Any) -> dict[str, Any]:
 
 def _annotated_pdf(result: LocalParseResult) -> bytes:
     pages: list[Image.Image] = []
+    table_reviews = result.document_metadata.get("table_reviews")
+    accepted_table_ids = (
+        {
+            str(item["table_id"])
+            for item in table_reviews
+            if isinstance(item, dict)
+            and item.get("status") == "accepted"
+            and item.get("table_id") is not None
+        }
+        if isinstance(table_reviews, list)
+        else None
+    )
     for page in result.pages:
         image = Image.open(io.BytesIO(page.original_image_bytes or page.image_bytes)).convert("RGB")
         draw = ImageDraw.Draw(image)
-        for region in _grounded_regions(page):
-            points = region["polygon"]
-            draw.line(points + [points[0]], fill="#D72D7A", width=max(2, image.width // 600))
-            score = "?" if region["confidence"] is None else f"{region['confidence']:.2f}"
+        for region in page.layout_regions:
+            points = (
+                [(point[0], point[1]) for point in region.polygon]
+                if region.polygon
+                else [
+                    (region.bbox[0] * image.width, region.bbox[1] * image.height),
+                    (region.bbox[2] * image.width, region.bbox[1] * image.height),
+                    (region.bbox[2] * image.width, region.bbox[3] * image.height),
+                    (region.bbox[0] * image.width, region.bbox[3] * image.height),
+                ]
+            )
+            draw.line(points + [points[0]], fill="#00A8B8", width=max(2, image.width // 700))
             draw.text(
                 points[0],
-                f"{region['id']} · {score} · {region['engine']}",
-                fill="#00A8B8",
+                f"{region.id} · {region.label} · {region.score:.2f}",
+                fill="#34285F",
             )
-        for checkbox in (item for item in result.checkboxes if item.page == page.page):
+        for table in page.table_structures:
+            if (
+                table.status != "valid"
+                or table.review_required
+                or (accepted_table_ids is not None and table.id not in accepted_table_ids)
+            ):
+                continue
+            for cell in table.cells:
+                left, top, right, bottom = cell.bbox
+                points = [
+                    (left * image.width, top * image.height),
+                    (right * image.width, top * image.height),
+                    (right * image.width, bottom * image.height),
+                    (left * image.width, bottom * image.height),
+                ]
+                draw.line(points + [points[0]], fill="#F0A020", width=max(2, image.width // 800))
+        for checkbox in (
+            item
+            for item in result.checkboxes
+            if item.page == page.page and is_publishable_checkbox(item)
+        ):
             left, top, right, bottom = checkbox.control_bbox
             points = [
                 (left * image.width, top * image.height),
@@ -263,81 +437,6 @@ def _annotated_pdf(result: LocalParseResult) -> bytes:
     output = io.BytesIO()
     pages[0].save(output, "PDF", save_all=True, append_images=pages[1:], resolution=150)
     return output.getvalue()
-
-
-def _standalone_html(result: LocalParseResult) -> str:
-    renderer = MarkdownIt("commonmark", {"html": False, "linkify": False}).enable("table")
-    markdown_pages = _markdown_by_page(result.markdown)
-    page_html: list[str] = []
-    for page in result.pages:
-        evidence: list[str] = []
-        for order, region in enumerate(_grounded_regions(page), 1):
-            confidence = (
-                "unknown" if region["confidence"] is None else f"{region['confidence']:.4f}"
-            )
-            bbox = ", ".join(f"{coordinate:.4f}" for coordinate in region["bbox"])
-            evidence.append(
-                f'<li data-grounding-id="{html.escape(region["id"])}" '
-                f'data-block-type="{html.escape(region["type"])}" data-reading-order="{order}" '
-                f'data-bbox="{bbox}"><code>{html.escape(region["id"])}</code> · '
-                f"{html.escape(region['type'])} · confidence {confidence} · "
-                f"bbox [{bbox}]</li>"
-            )
-        for checkbox in (item for item in result.checkboxes if item.page == page.page):
-            bbox = ", ".join(f"{coordinate:.4f}" for coordinate in checkbox.control_bbox)
-            evidence.append(
-                f'<li class="checkbox" '
-                f'data-checkbox-id="{html.escape(checkbox.id)}" '
-                f'data-checkbox-state="{html.escape(checkbox.state.value)}" '
-                f'data-bbox="{bbox}"><code>{html.escape(checkbox.id)}</code> · '
-                f"{html.escape(checkbox.label)} · {html.escape(checkbox.state.value)} · "
-                f"bbox [{bbox}]</li>"
-            )
-        fallback = result.markdown if len(result.pages) == 1 else ""
-        body = renderer.render(markdown_for_display(markdown_pages.get(page.page, fallback)))
-        evidence_html = "".join(evidence) or "<li>No grounded regions available.</li>"
-        page_html.append(
-            f'<section class="page" data-source-page="{page.page}" '
-            f'data-page-width="{page.width}" data-page-height="{page.height}" '
-            f'aria-label="Document page {page.page}"><header>Page {page.page}</header>'
-            f'<article class="markdown">{body}</article>'
-            f'<details class="grounding"><summary>Grounding context</summary>'
-            f"<ol>{evidence_html}</ol></details></section>"
-        )
-    return (
-        """<!doctype html><html><head><meta charset="utf-8"><title>Document</title>
-<style>
-body { margin:0; padding:24px; background:#111318; color:#171922;
-       font:16px/1.5 system-ui,sans-serif; }
-main { max-width:960px; margin:auto; }
-.page { box-sizing:border-box; min-height:900px; margin:0 auto 28px; padding:48px 56px;
-        background:#fff; box-shadow:0 2px 8px #0005; }
-.page>header { color:#687083; font-size:12px; border-bottom:1px solid #d8dbe3;
-               margin-bottom:24px; padding-bottom:8px; }
-.markdown { overflow-wrap:anywhere; }
-.markdown table { border-collapse:collapse; width:100%; }
-.markdown th,.markdown td { border:1px solid #aeb4c0; padding:6px 8px; text-align:left; }
-.markdown pre { overflow:auto; padding:12px; background:#f2f3f6; }
-.grounding { margin-top:36px; border-top:1px solid #d8dbe3; padding-top:12px; color:#4e5668; }
-.grounding li { margin:4px 0; }
-@media print { body { padding:0; background:#fff; }
-               .page { box-shadow:none; page-break-after:always; }
-               .grounding { display:none; } }
-</style></head><body><main>"""
-        + "".join(page_html)
-        + "</main></body></html>"
-    )
-
-
-def _markdown_by_page(markdown: str) -> dict[int, str]:
-    markers = list(_PAGE_MARKER_PATTERN.finditer(markdown))
-    if not markers:
-        return {1: markdown}
-    return {
-        int(match.group(1)): markdown[match.end() : markers[index + 1].start()].strip()
-        for index, match in enumerate(markers)
-        if index + 1 < len(markers)
-    } | {int(markers[-1].group(1)): markdown[markers[-1].end() :].strip()}
 
 
 def markdown_for_display(markdown: str) -> str:
@@ -435,8 +534,17 @@ def _grounded_regions(page: Any) -> list[dict[str, Any]]:
     return regions
 
 
-def _artifact_entry(name: str, data: bytes) -> dict[str, object]:
-    return {"name": name, "bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()}
+def _artifact_entry(name: str, data: bytes) -> ArtifactMetadataValue:
+    return {
+        "name": name,
+        "bytes": len(data),
+        "sha256": hashlib.sha256(data).hexdigest(),
+        "generated": True,
+    }
+
+
+def _pending_artifact_entry(name: str) -> ArtifactMetadataValue:
+    return {"name": name, "bytes": None, "sha256": None, "generated": False}
 
 
 def _checkbox_crops(result: LocalParseResult) -> dict[str, bytes]:
@@ -483,6 +591,27 @@ def _page_manifest(result: LocalParseResult) -> list[dict[str, object]]:
                     "stages": page.stage_timings if page else {},
                 },
                 "layout_signals": page.layout_signals if page else {},
+                "layout_regions": (
+                    [item.model_dump(mode="json") for item in page.layout_regions] if page else []
+                ),
+                "layout_block_links": (
+                    [item.model_dump(mode="json") for item in page.layout_block_links]
+                    if page
+                    else []
+                ),
+                "reading_order_evidence": (
+                    page.reading_order_evidence.model_dump(mode="json")
+                    if page and page.reading_order_evidence
+                    else None
+                ),
+                "table_structures": (
+                    [item.model_dump(mode="json") for item in page.table_structures] if page else []
+                ),
+                "redaction_candidates": (
+                    [item.model_dump(mode="json") for item in page.local_redaction_candidates]
+                    if page
+                    else []
+                ),
                 "warnings": page.warnings if page else [],
             }
         )

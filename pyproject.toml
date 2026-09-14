@@ -10,6 +10,7 @@ dependencies = [
     "numpy>=2.5.2",
     "onnx>=1.22.0",
     "onnxruntime-gpu>=1.29.0",
+    "opencv-python>=5.0,<5.1",
     "openai>=3.6.0",
     "pillow>=12.3.0",
     "pydantic>=2.13.5",

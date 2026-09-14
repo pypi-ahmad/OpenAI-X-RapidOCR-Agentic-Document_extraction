@@ -1,4 +1,18 @@
-"""The only OpenAI boundary. Model policy is intentionally not caller-configurable."""
+"""The only OpenAI boundary. Model policy is intentionally not caller-configurable.
+
+Responsible for: the single external boundary calling OpenAI Responses API
+with fixed model `gpt-5.6-luna` (`reasoning_effort="medium"`). Handles prompt
+template rendering, structured output parsing, token usage collection, visual
+crop routing, checkbox verification, dedicated table reviews, and document
+chat turns.
+
+Must not: allow callers to override the model or reasoning effort, expose
+raw credentials to callers or log files, or accept model output without
+rigorous schema validation against the untrusted cloud boundary.
+
+Next: `pipeline.py`, which coordinates the interaction between local OCR
+results and `OpenAIRefiner`.
+"""
 
 from __future__ import annotations
 
@@ -11,8 +25,9 @@ from typing import Annotated, Any, Literal, cast
 
 from openai import OpenAI
 from PIL import Image
-from pydantic import BaseModel, Field, WithJsonSchema
+from pydantic import BaseModel, Field, ValidationError, WithJsonSchema
 
+from agentic_extractor.checkbox_vision import is_credible_checkbox_candidate
 from agentic_extractor.config import SETTINGS, Settings
 from agentic_extractor.costs import (
     MODEL_NAME,
@@ -28,9 +43,15 @@ from agentic_extractor.document_chat import (
     MarkdownExcerpt,
     ProcessedMarkdownDocument,
 )
-from agentic_extractor.models import UsageRecord
-from agentic_extractor.parse import LOW_CONFIDENCE_THRESHOLD, PageParse, build_layout_chunks
+from agentic_extractor.models import TableStructureEvidence, UsageRecord
+from agentic_extractor.parse import PageParse, build_layout_chunks
 from agentic_extractor.prompt_resources import PromptResource, load_prompt, render_prompt
+from agentic_extractor.table_structure import (
+    table_review_bbox,
+    table_review_block_ids,
+    table_word_evidence,
+)
+from agentic_extractor.visual_routing import block_requires_gpt_review
 
 _CAPABILITY_PROMPTS = {
     "Parse": "capability-parse.md",
@@ -49,6 +70,16 @@ _BLOCK_EVIDENCE_COLUMNS = [
     "polygon",
     "requires_gpt_review",
 ]
+_LOCAL_SEMANTIC_REGION_COLUMNS = [
+    "id",
+    "label",
+    "reading_order",
+    "bbox",
+    "confidence",
+    "source_block_ids",
+    "source_chunk_ids",
+    "source",
+]
 _GROUNDING_COLUMNS = ["page", "block_id", "chunk_id", "type", "confidence", "bbox", "text"]
 
 
@@ -57,6 +88,12 @@ class _ContextPacket:
     text: str
     resources: list[PromptResource]
     metrics: dict[str, Any]
+
+
+@dataclass(frozen=True, slots=True)
+class _RefinementBatch:
+    kind: Literal["compact", "full"]
+    pages: list[PageParse]
 
 
 type StructuredFieldValue = Annotated[
@@ -85,6 +122,189 @@ def _prompt_json(value: Any) -> str:
     )
 
 
+def _bbox_center_in(box: list[float], container: list[float]) -> bool:
+    x = (box[0] + box[2]) / 2
+    y = (box[1] + box[3]) / 2
+    return container[0] <= x <= container[2] and container[1] <= y <= container[3]
+
+
+def _local_semantic_regions(page: PageParse) -> list[list[Any]]:
+    """Group every OCR block once using local layout evidence before Luna."""
+    blocks = {block.id: block for block in page.blocks}
+    block_order = {block.id: index for index, block in enumerate(page.blocks)}
+    regions = {region.id: region for region in page.layout_regions}
+    primary = {
+        link.block_id: link.primary_region_id
+        for link in page.layout_block_links
+        if link.block_id in blocks and link.primary_region_id in regions
+    }
+    chunks = page.chunks or build_layout_chunks(page.blocks)
+    chunk_by_block: dict[str, str] = {}
+    for chunk in chunks:
+        for block_id in chunk.source_block_ids:
+            chunk_by_block.setdefault(block_id, chunk.id)
+
+    pending: list[tuple[int, list[Any]]] = []
+    grouped: set[str] = set()
+    for region in page.layout_regions:
+        source_ids = [block.id for block in page.blocks if primary.get(block.id) == region.id]
+        if not source_ids:
+            continue
+        grouped.update(source_ids)
+        pending.append(
+            (
+                min(block_order[block_id] for block_id in source_ids),
+                [
+                    region.id,
+                    region.label,
+                    0,
+                    region.bbox,
+                    region.score,
+                    source_ids,
+                    list(
+                        dict.fromkeys(
+                            chunk_by_block[block_id]
+                            for block_id in source_ids
+                            if block_id in chunk_by_block
+                        )
+                    ),
+                    region.model,
+                ],
+            )
+        )
+
+    fallback = 0
+    for chunk in chunks:
+        source_ids = [
+            block_id
+            for block_id in chunk.source_block_ids
+            if block_id in blocks and block_id not in grouped
+        ]
+        if not source_ids:
+            continue
+        fallback += 1
+        grouped.update(source_ids)
+        pending.append(
+            (
+                min(block_order[block_id] for block_id in source_ids),
+                [
+                    f"p{page.page}-sr-fallback-{fallback}",
+                    chunk.type,
+                    0,
+                    _union_block_bboxes([blocks[block_id] for block_id in source_ids]),
+                    None,
+                    source_ids,
+                    [chunk.id],
+                    "geometry-fallback",
+                ],
+            )
+        )
+
+    for block in page.blocks:
+        if block.id in grouped:
+            continue
+        fallback += 1
+        pending.append(
+            (
+                block_order[block.id],
+                [
+                    f"p{page.page}-sr-fallback-{fallback}",
+                    block.type,
+                    0,
+                    block.bbox,
+                    None,
+                    [block.id],
+                    [],
+                    "geometry-fallback",
+                ],
+            )
+        )
+
+    rows = [row for _, row in sorted(pending, key=lambda item: item[0])]
+    for reading_order, row in enumerate(rows, 1):
+        row[2] = reading_order
+    return rows
+
+
+def _union_block_bboxes(blocks: list[Any]) -> list[float] | None:
+    boxes = [block.bbox for block in blocks if block.bbox]
+    if not boxes:
+        return None
+    return [
+        min(box[0] for box in boxes),
+        min(box[1] for box in boxes),
+        max(box[2] for box in boxes),
+        max(box[3] for box in boxes),
+    ]
+
+
+def _add_semantic_table_candidates(
+    pages: list[PageParse], proposals: list[CloudSemanticRegion]
+) -> None:
+    """Route grounded Luna table regions through the existing table validator."""
+    by_page: dict[int, list[CloudSemanticRegion]] = {}
+    for proposal in proposals:
+        if proposal.type == "table":
+            by_page.setdefault(proposal.page, []).append(proposal)
+    for page in pages:
+        page_proposals = by_page.get(page.page, [])
+        if not page_proposals:
+            continue
+        blocks = {block.id: block for block in page.blocks if block.source == "rapidocr"}
+        existing_by_layout = {table.layout_region_id: table for table in page.table_structures}
+        citation_counts: dict[str, int] = {}
+        for proposal in page_proposals:
+            for region_id in set(proposal.source_layout_region_ids) & set(existing_by_layout):
+                citation_counts[region_id] = citation_counts.get(region_id, 0) + 1
+        split_layout_ids = {region_id for region_id, count in citation_counts.items() if count > 1}
+        retained = [
+            table
+            for table in page.table_structures
+            if table.layout_region_id not in split_layout_ids
+        ]
+        occupied = {
+            block_id for table in retained for block_id in table_review_block_ids(page, table)
+        }
+        candidate_ids = {table.id for table in retained}
+        added: list[TableStructureEvidence] = []
+        for proposal in page_proposals:
+            source_ids = list(proposal.source_block_ids)
+            source_id_set = set(source_ids)
+            if (
+                not source_ids
+                or len(source_ids) != len(source_id_set)
+                or not source_id_set <= set(blocks)
+            ):
+                continue
+            cited_existing = set(proposal.source_layout_region_ids) & set(existing_by_layout)
+            if cited_existing and not cited_existing <= split_layout_ids:
+                continue
+            if source_id_set & occupied:
+                continue
+            bbox = _union_block_bboxes([blocks[block_id] for block_id in source_ids])
+            candidate_id = f"{proposal.id}-table"
+            if bbox is None or candidate_id in candidate_ids:
+                continue
+            added.append(
+                TableStructureEvidence(
+                    id=candidate_id,
+                    page=page.page,
+                    layout_region_id=f"{proposal.id}-semantic-table",
+                    bbox=bbox,
+                    style="wireless",
+                    classifier_score=0,
+                    structure_score=0,
+                    structure_model="SLANet_plus",
+                    status="invalid",
+                    review_required=True,
+                    warnings=["Grounded semantic table candidate requires cell reconstruction."],
+                )
+            )
+            candidate_ids.add(candidate_id)
+            occupied.update(source_id_set)
+        page.table_structures = [*retained, *added]
+
+
 class OpenAIConfigurationError(RuntimeError):
     """OpenAI credentials or endpoint configuration cannot be used."""
 
@@ -107,7 +327,10 @@ class CloudEvidence(BaseModel):
 
 class CloudRefinement(BaseModel):
     page: int = Field(ge=1)
-    block_id: str | None = None
+    block_id: str | None = Field(
+        default=None,
+        description="Existing OCR block ID, or a supplied local redaction candidate ID.",
+    )
     corrected_text: str | None = Field(
         default=None, description="Complete replacement text for the cited block."
     )
@@ -121,6 +344,46 @@ class CloudRefinement(BaseModel):
         default=False, description="True when evidence cannot support a change."
     )
     warning: str | None = None
+
+
+class CloudTableCell(BaseModel):
+    row: int = Field(ge=1)
+    column: int = Field(ge=1)
+    row_span: int = Field(default=1, ge=1)
+    column_span: int = Field(default=1, ge=1)
+    tag: Literal["th", "td"] = "td"
+    text: str = ""
+    bbox: list[float] | None = Field(
+        default=None,
+        min_length=4,
+        max_length=4,
+        description=(
+            "Page-normalized visual bounds. Required only for a genuinely blank cell with no "
+            "RapidOCR word or block IDs."
+        ),
+    )
+    source_block_ids: list[str] = Field(default_factory=list)
+    source_word_ids: list[str] = Field(default_factory=list)
+
+
+class CloudTableReview(BaseModel):
+    page: int = Field(ge=1)
+    table_id: str
+    outcome: Literal["confirmed", "corrected", "not_table", "abstained"]
+    visible_cell_count: int | None = Field(
+        default=None,
+        ge=0,
+        description="Count of visible HTML cells, including blank and spanning cells.",
+    )
+    cells: list[CloudTableCell] = Field(default_factory=list)
+    excluded_source_block_ids: list[str] = Field(default_factory=list)
+    excluded_source_word_ids: list[str] = Field(default_factory=list)
+    evidence: list[CloudEvidence] = Field(default_factory=list)
+    warning: str | None = None
+
+
+class TableReviewResult(BaseModel):
+    reviews: list[CloudTableReview] = Field(default_factory=list)
 
 
 class CloudClassification(BaseModel):
@@ -187,9 +450,42 @@ class CloudCheckbox(BaseModel):
     evidence: list[CloudEvidence] = Field(default_factory=list)
 
 
+class CloudSemanticRegion(BaseModel):
+    """A grounded grouping proposal; displayed text always comes from its source blocks."""
+
+    id: str
+    page: int = Field(ge=1)
+    type: Literal[
+        "text",
+        "heading",
+        "list",
+        "form",
+        "table",
+        "marginalia",
+        "logo",
+        "attestation",
+        "figure",
+        "scan_code",
+    ]
+    reading_order: int = Field(ge=1)
+    source_block_ids: list[str] = Field(min_length=1)
+    source_layout_region_ids: list[str] = Field(default_factory=list)
+    evidence: list[CloudEvidence] = Field(
+        default_factory=list,
+        description=(
+            "Visual evidence required when PP-DocLayoutV3 cannot express the semantic type."
+        ),
+    )
+    join_style: Literal["space", "line_break"] = "line_break"
+    heading_level: int = Field(default=2, ge=1, le=6)
+
+
 class CheckboxVerification(BaseModel):
     id: str
     page: int = Field(ge=1)
+    control_status: Literal["checkbox", "not_checkbox", "uncertain"] = Field(
+        description="Whether the crop visibly depicts a checkbox control."
+    )
     state: Literal["CHECKED", "UNCHECKED", "INDETERMINATE", "CROSSED_OUT", "NOT_DETERMINABLE"]
     confidence: float | None = Field(default=None, ge=0, le=1)
     reason: str | None = None
@@ -209,6 +505,8 @@ class CloudResult(BaseModel):
     splits: list[CloudSplit] = Field(default_factory=list)
     extracted_fields: list[ExtractedField] = Field(default_factory=list)
     checkboxes: list[CloudCheckbox] = Field(default_factory=list)
+    table_reviews: list[CloudTableReview] = Field(default_factory=list)
+    semantic_regions: list[CloudSemanticRegion] = Field(default_factory=list)
 
 
 class MarkdownWorkflowResult(BaseModel):
@@ -338,7 +636,8 @@ class OpenAIRefiner:
             allowed_classes,
             extraction_schema,
         )
-        for batch in batches:
+        for batch_index, planned_batch in enumerate(batches, start=1):
+            batch = planned_batch.pages
             packet = self._prompt_packet(
                 batch,
                 full_context_pages,
@@ -352,8 +651,12 @@ class OpenAIRefiner:
                     "text": packet.text,
                 }
             ]
+            visual_resources: list[PromptResource] = []
+            overview_pages: list[int] = []
+            high_resolution_regions: list[dict[str, Any]] = []
             for page in batch:
-                encoded = base64.b64encode(self._bounded_image(page.image_bytes)).decode("ascii")
+                regions = page.visual_review_regions
+                page_image = self._bounded_image(page.original_image_bytes or page.image_bytes)
                 visual_label, visual_resource = render_prompt(
                     "visual-page.md", page_number=page.page
                 )
@@ -362,13 +665,52 @@ class OpenAIRefiner:
                         {"type": "input_text", "text": visual_label},
                         {
                             "type": "input_image",
-                            "image_url": f"data:image/jpeg;base64,{encoded}",
+                            "image_url": "data:image/jpeg;base64,"
+                            + base64.b64encode(page_image).decode("ascii"),
                             "detail": "high",
                         },
                     ]
                 )
+                visual_resources.append(visual_resource)
+                overview_pages.append(page.page)
+                for region in regions:
+                    if region.page_wide:
+                        continue
+                    region_label, region_resource = render_prompt(
+                        "visual-region.md",
+                        region_id=region.id,
+                        page_number=page.page,
+                        region_bbox=_prompt_json(region.bbox),
+                        reason_codes=_prompt_json(region.reason_codes),
+                        source_block_ids=_prompt_json(region.source_block_ids),
+                        source_checkbox_ids=_prompt_json(region.source_checkbox_ids),
+                        source_redaction_ids=_prompt_json(region.source_redaction_ids),
+                    )
+                    crop = self._region_crop(
+                        page.original_image_bytes or page.image_bytes, region.bbox
+                    )
+                    content.extend(
+                        [
+                            {"type": "input_text", "text": region_label},
+                            {
+                                "type": "input_image",
+                                "image_url": "data:image/jpeg;base64,"
+                                + base64.b64encode(crop).decode("ascii"),
+                                "detail": "high",
+                            },
+                        ]
+                    )
+                    visual_resources.append(region_resource)
+                    high_resolution_regions.append(region.model_dump(mode="json"))
             started = time.perf_counter()
-            response = self._request(content)
+            try:
+                response = self._request(content)
+            except Exception as exc:
+                page_numbers = [page.page for page in batch]
+                raise RuntimeError(
+                    f"GPT-5.6-luna {planned_batch.kind} batch "
+                    f"{batch_index}/{len(batches)} for pages {page_numbers} failed: {exc}"
+                ) from exc
             elapsed = time.perf_counter() - started
             parsed = response.output_parsed
             if parsed is None:
@@ -376,6 +718,37 @@ class OpenAIRefiner:
             expected_pages = [page.page for page in batch]
             if sorted(parsed.reviewed_pages) != expected_pages:
                 raise RuntimeError("GPT-5.6-luna must review every requested page exactly once.")
+            redaction_pages = {
+                candidate.id: page.page
+                for page in batch
+                for candidate in page.local_redaction_candidates
+            }
+            expected_redactions = sorted(redaction_pages)
+            redaction_ids = set(expected_redactions)
+            reviewed_redactions = [
+                refinement.block_id
+                for refinement in parsed.refinements
+                if refinement.block_id in redaction_ids
+            ]
+            if len(reviewed_redactions) != len(set(reviewed_redactions)):
+                raise RuntimeError(
+                    "GPT-5.6-luna returned duplicate outcomes for a local redaction candidate."
+                )
+            missing_redactions = sorted(redaction_ids - set(reviewed_redactions))
+            for candidate_id in missing_redactions:
+                parsed.refinements.append(
+                    CloudRefinement(
+                        page=redaction_pages[candidate_id],
+                        block_id=candidate_id,
+                        abstained=True,
+                        warning="GPT-5.6-luna omitted this local redaction candidate.",
+                    )
+                )
+            if missing_redactions:
+                parsed.warnings.append(
+                    "GPT-5.6-luna omitted local redaction candidates; they were recorded as "
+                    "abstentions and were not published: " + ", ".join(missing_redactions)
+                )
             separator = "\n\n" if aggregate.refined_markdown else ""
             aggregate.refined_markdown += separator + parsed.refined_markdown
             aggregate.reviewed_pages.extend(parsed.reviewed_pages)
@@ -386,12 +759,20 @@ class OpenAIRefiner:
             aggregate.splits.extend(parsed.splits)
             aggregate.extracted_fields.extend(parsed.extracted_fields)
             aggregate.checkboxes.extend(parsed.checkboxes)
+            aggregate.table_reviews.extend(parsed.table_reviews)
+            aggregate.semantic_regions.extend(parsed.semantic_regions)
             resources = list(packet.resources)
-            resources.append(visual_resource)
+            resources.extend(visual_resources)
             context = dict(packet.metrics)
             context["prompt_characters"] = sum(
                 len(item["text"]) for item in content if item["type"] == "input_text"
             )
+            context["overview_pages"] = overview_pages
+            context["high_resolution_regions"] = high_resolution_regions
+            context["high_resolution_region_count"] = len(high_resolution_regions)
+            context["batch_kind"] = planned_batch.kind
+            context["batch_index"] = batch_index
+            context["batch_count"] = len(batches)
             call = self._read_usage(
                 response,
                 batch,
@@ -402,6 +783,19 @@ class OpenAIRefiner:
                 context=context,
             )
             call_usages.append(call)
+        _add_semantic_table_candidates(pages, aggregate.semantic_regions)
+        if any(page.table_structures for page in pages):
+            table_result, table_usage = self.review_tables(pages)
+            table_pages = {review.page for review in table_result.reviews}
+            aggregate.table_reviews = [
+                review for review in aggregate.table_reviews if review.page not in table_pages
+            ]
+            aggregate.table_reviews.extend(table_result.reviews)
+            call_usages.append(table_usage)
+        expected_pages = [page.page for page in pages]
+        if sorted(aggregate.reviewed_pages) != sorted(expected_pages):
+            raise RuntimeError("GPT-5.6-luna must review every requested page exactly once.")
+        aggregate.reviewed_pages = expected_pages
         if len(batches) > 1 and capabilities - {"Parse"}:
             reconciled, usage = self._reconcile(
                 pages, capabilities, allowed_classes, extraction_schema, aggregate
@@ -413,6 +807,126 @@ class OpenAIRefiner:
             aggregate.warnings.extend(reconciled.warnings)
             call_usages.append(usage)
         return aggregate, aggregate_usage(call_usages)
+
+    def review_tables(self, pages: list[PageParse]) -> tuple[TableReviewResult, UsageRecord]:
+        """Run a bounded visual review covering every local table candidate exactly once."""
+        page_by_number = {page.page: page for page in pages}
+        candidates: list[dict[str, Any]] = []
+        expected: dict[str, int] = {}
+        for page in pages:
+            for table in page.table_structures:
+                source_ids = table_review_block_ids(page, table)
+                review_bbox = table_review_bbox(page, table)
+                source_blocks = [block for block in page.blocks if block.id in source_ids]
+                expected[table.id] = page.page
+                candidates.append(
+                    {
+                        "table": table.model_dump(mode="json"),
+                        "review_bbox": review_bbox,
+                        "expected_source_blocks": [
+                            {
+                                "id": block.id,
+                                "text": block.text,
+                                "bbox": block.bbox,
+                                "ocr_score": block.ocr_score,
+                                "words": table_word_evidence(page, {block.id}),
+                            }
+                            for block in source_blocks
+                        ],
+                    }
+                )
+        if not candidates:
+            return TableReviewResult(), UsageRecord()
+        review_page_numbers = set(expected.values())
+        review_pages = [page for page in pages if page.page in review_page_numbers]
+        evidence = _prompt_json(candidates)
+        prompt, prompt_resource = render_prompt("table-review.md", table_candidates=evidence)
+        content: list[dict[str, Any]] = [{"type": "input_text", "text": prompt}]
+        visual_resources: list[PromptResource] = []
+        for page in review_pages:
+            label, resource = render_prompt("visual-page.md", page_number=page.page)
+            overview = self._bounded_image(page.image_bytes, max_dimension=512, quality=75)
+            content.extend(
+                [
+                    {"type": "input_text", "text": label},
+                    {
+                        "type": "input_image",
+                        "image_url": "data:image/jpeg;base64,"
+                        + base64.b64encode(overview).decode("ascii"),
+                        "detail": "low",
+                    },
+                ]
+            )
+            visual_resources.append(resource)
+        for candidate in candidates:
+            table = candidate["table"]
+            page = page_by_number[int(table["page"])]
+            review_bbox = candidate["review_bbox"]
+            label, resource = render_prompt(
+                "visual-region.md",
+                region_id=table["id"],
+                page_number=table["page"],
+                region_bbox=_prompt_json(review_bbox),
+                reason_codes=_prompt_json(["table_semantic_validation", "detector_edge_recovery"]),
+                source_block_ids=_prompt_json(
+                    [item["id"] for item in candidate["expected_source_blocks"]]
+                ),
+                source_checkbox_ids="[]",
+                source_redaction_ids="[]",
+            )
+            crop = self._region_crop(page.original_image_bytes or page.image_bytes, review_bbox)
+            content.extend(
+                [
+                    {"type": "input_text", "text": label},
+                    {
+                        "type": "input_image",
+                        "image_url": "data:image/jpeg;base64,"
+                        + base64.b64encode(crop).decode("ascii"),
+                        "detail": "high",
+                    },
+                ]
+            )
+            visual_resources.append(resource)
+        started = time.perf_counter()
+        for attempt in range(2):
+            response = self._request(content, TableReviewResult)
+            parsed = response.output_parsed
+            if parsed is None:
+                raise RuntimeError("OpenAI returned no structured table-review result.")
+            actual = [review.table_id for review in parsed.reviews]
+            coverage_is_exact = len(actual) == len(set(actual)) and set(actual) == set(expected)
+            if coverage_is_exact:
+                break
+            if attempt:
+                raise RuntimeError("GPT-5.6-luna must review every table candidate exactly once.")
+        elapsed = time.perf_counter() - started
+        if any(review.page != expected[review.table_id] for review in parsed.reviews):
+            raise RuntimeError("GPT-5.6-luna table review referenced an unexpected page.")
+        usage = self._read_usage(
+            response,
+            review_pages,
+            review_page_numbers,
+            elapsed,
+            [prompt_resource, *visual_resources],
+            purpose="table_review",
+            context={
+                "kind": "table_review",
+                "prompt_characters": len(prompt),
+                "evidence_characters": len(evidence),
+                "source_text_characters": sum(
+                    len(item["text"])
+                    for candidate in candidates
+                    for item in candidate["expected_source_blocks"]
+                ),
+                "block_count": sum(
+                    len(candidate["expected_source_blocks"]) for candidate in candidates
+                ),
+                "table_ids": list(expected),
+                "compact_pages": [],
+                "full_context_pages": [page.page for page in review_pages],
+            },
+        )
+        return parsed, usage
 
     def refine_markdown(
         self,
@@ -450,6 +964,15 @@ class OpenAIRefiner:
                 )
         grounding_json = _prompt_json(grounding)
         issues_json = _prompt_json(issues or [])
+        target_ids = sorted(
+            {
+                str(identifier)
+                for issue in issues or []
+                for identifier in issue.get("source_ids", [])
+            }
+        )
+        if issues and not target_ids:
+            raise ValueError("Object repair requires at least one identified validation object.")
         prior_json = _prompt_json(prior.model_dump(mode="json") if prior else None)
         prompt, prompt_resource = render_prompt(
             "markdown-workflow.md",
@@ -487,9 +1010,9 @@ class OpenAIRefiner:
             set(),
             elapsed,
             [prompt_resource, *capability_resources],
-            purpose="markdown_workflow_repair" if issues else "markdown_workflow",
+            purpose="object_repair" if issues else "markdown_workflow",
             context={
-                "kind": "grounded_markdown",
+                "kind": "object_repair" if issues else "grounded_markdown",
                 "prompt_characters": len(prompt),
                 "evidence_characters": (
                     len(markdown) + len(grounding_json) + len(issues_json) + len(prior_json)
@@ -500,6 +1023,7 @@ class OpenAIRefiner:
                 "block_count": len(grounding),
                 "compact_pages": [],
                 "full_context_pages": [],
+                "target_ids": target_ids,
             },
         )
         return cloud, usage
@@ -677,21 +1201,51 @@ class OpenAIRefiner:
             prior_proposal=prior_json,
         )
         content: list[dict[str, Any]] = [{"type": "input_text", "text": prompt}]
+        visual_resources: list[PromptResource] = []
         for page in pages:
             if page.page not in image_pages:
                 continue
-            encoded = base64.b64encode(self._bounded_image(page.image_bytes)).decode("ascii")
-            visual_label, visual_resource = render_prompt("visual-page.md", page_number=page.page)
-            content.extend(
-                [
-                    {"type": "input_text", "text": visual_label},
-                    {
-                        "type": "input_image",
-                        "image_url": f"data:image/jpeg;base64,{encoded}",
-                        "detail": "high",
-                    },
-                ]
-            )
+            if not any(region.page_wide for region in page.visual_review_regions):
+                visual_label, visual_resource = render_prompt(
+                    "visual-page.md", page_number=page.page
+                )
+                overview = self._bounded_image(page.image_bytes, max_dimension=512, quality=75)
+                content.extend(
+                    [
+                        {"type": "input_text", "text": visual_label},
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/jpeg;base64,"
+                            + base64.b64encode(overview).decode("ascii"),
+                            "detail": "low",
+                        },
+                    ]
+                )
+                visual_resources.append(visual_resource)
+            for region in page.visual_review_regions:
+                region_label, region_resource = render_prompt(
+                    "visual-region.md",
+                    region_id=region.id,
+                    page_number=page.page,
+                    region_bbox=_prompt_json(region.bbox),
+                    reason_codes=_prompt_json(region.reason_codes),
+                    source_block_ids=_prompt_json(region.source_block_ids),
+                    source_checkbox_ids=_prompt_json(region.source_checkbox_ids),
+                    source_redaction_ids=_prompt_json(region.source_redaction_ids),
+                )
+                crop = self._region_crop(page.original_image_bytes or page.image_bytes, region.bbox)
+                content.extend(
+                    [
+                        {"type": "input_text", "text": region_label},
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/jpeg;base64,"
+                            + base64.b64encode(crop).decode("ascii"),
+                            "detail": "high",
+                        },
+                    ]
+                )
+                visual_resources.append(region_resource)
         started = time.perf_counter()
         response = self._request(content)
         elapsed = time.perf_counter() - started
@@ -702,14 +1256,26 @@ class OpenAIRefiner:
         if sorted(parsed.reviewed_pages) != expected_pages:
             raise RuntimeError("GPT-5.6-luna repair must review every requested page exactly once.")
         resources = [*packet.resources, repair_resource]
-        if image_pages:
-            resources.append(visual_resource)
+        resources.extend(visual_resources)
         context = dict(packet.metrics)
         context["kind"] = "repair"
         context["prompt_characters"] = sum(
             len(item["text"]) for item in content if item["type"] == "input_text"
         )
         context["evidence_characters"] += len(issues_json) + len(prior_json)
+        context["overview_pages"] = [
+            page.page
+            for page in pages
+            if page.page in image_pages
+            and not any(region.page_wide for region in page.visual_review_regions)
+        ]
+        context["high_resolution_regions"] = [
+            region.model_dump(mode="json")
+            for page in pages
+            if page.page in image_pages
+            for region in page.visual_review_regions
+        ]
+        context["high_resolution_region_count"] = len(context["high_resolution_regions"])
         return parsed, self._read_usage(
             response,
             pages,
@@ -727,10 +1293,13 @@ class OpenAIRefiner:
         capabilities: set[str],
         allowed_classes: list[str],
         extraction_schema: dict[str, Any] | None,
-    ) -> list[list[PageParse]]:
-        batches: list[list[PageParse]] = []
+    ) -> list[_RefinementBatch]:
+        compact_pages = [page for page in pages if page.page not in full_context_pages]
+        compact_page_numbers = {page.page for page in compact_pages}
+        full_pages = [page for page in pages if page.page not in compact_page_numbers]
+        batches: list[_RefinementBatch] = []
         current: list[PageParse] = []
-        for page in pages:
+        for page in compact_pages:
             candidate = [*current, page]
             candidate_size = self._prompt_packet(
                 candidate,
@@ -740,20 +1309,35 @@ class OpenAIRefiner:
                 extraction_schema,
             ).metrics["evidence_characters"]
             if current and candidate_size > self.settings.cloud_batch_characters:
-                batches.append(current)
+                batches.append(_RefinementBatch(kind="compact", pages=current))
                 current = [page]
             else:
                 current = candidate
         if current:
-            batches.append(current)
+            batches.append(_RefinementBatch(kind="compact", pages=current))
+        batches.extend(_RefinementBatch(kind="full", pages=[page]) for page in full_pages)
         return batches
 
     @staticmethod
-    def _bounded_image(data: bytes, max_dimension: int = 2048) -> bytes:
+    def _bounded_image(data: bytes, max_dimension: int = 2048, quality: int = 85) -> bytes:
         image = Image.open(io.BytesIO(data)).convert("RGB")
         image.thumbnail((max_dimension, max_dimension))
         output = io.BytesIO()
-        image.save(output, "JPEG", quality=85, optimize=True)
+        image.save(output, "JPEG", quality=quality, optimize=True)
+        return output.getvalue()
+
+    @staticmethod
+    def _region_crop(data: bytes, bbox: list[float]) -> bytes:
+        image = Image.open(io.BytesIO(data)).convert("RGB")
+        left, top, right, bottom = bbox
+        x0 = min(image.width - 1, max(0, int(left * image.width)))
+        y0 = min(image.height - 1, max(0, int(top * image.height)))
+        x1 = min(image.width, max(x0 + 1, int(right * image.width)))
+        y1 = min(image.height, max(y0 + 1, int(bottom * image.height)))
+        crop = image.crop((x0, y0, x1, y1))
+        output = io.BytesIO()
+        crop.thumbnail((2048, 2048))
+        crop.save(output, "JPEG", quality=90, optimize=True)
         return output.getvalue()
 
     @staticmethod
@@ -772,6 +1356,13 @@ class OpenAIRefiner:
                 min(image.height, int((bottom + pad_y) * image.height)),
             )
         )
+        longest_side = max(crop.size)
+        if longest_side < 512:
+            scale = 512 / longest_side
+            crop = crop.resize(
+                (max(1, round(crop.width * scale)), max(1, round(crop.height * scale))),
+                Image.Resampling.LANCZOS,
+            )
         output = io.BytesIO()
         crop.save(output, "JPEG", quality=95, optimize=True)
         return output.getvalue()
@@ -784,15 +1375,22 @@ class OpenAIRefiner:
         policy_name: Literal["policy.md", "document-chat-system.md"] = "policy.md",
     ) -> Any:
         policy = load_prompt(policy_name)
-        return self.client.responses.parse(
-            model=MODEL_NAME,
-            reasoning={"effort": REASONING_EFFORT},
-            store=False,
-            tools=[],
-            instructions=policy.text,
-            input=cast(Any, [{"role": "user", "content": content}]),
-            text_format=text_format,
-        )
+        request = {
+            "model": MODEL_NAME,
+            "reasoning": {"effort": REASONING_EFFORT},
+            "store": False,
+            "tools": [],
+            "instructions": policy.text,
+            "input": cast(Any, [{"role": "user", "content": content}]),
+            "text_format": text_format,
+        }
+        try:
+            return self.client.responses.parse(**request)
+        except ValidationError:
+            # The SDK can receive an otherwise successful response whose JSON
+            # text was cut off before Pydantic parsing. Retry that idempotent,
+            # non-stored request once; a second invalid response still fails.
+            return self.client.responses.parse(**request)
 
     @staticmethod
     def _read_usage(
@@ -910,15 +1508,39 @@ class OpenAIRefiner:
         lines: list[str] = []
         context_resources: list[PromptResource] = []
         capability_instructions, capability_resources = self._capability_instructions(capabilities)
-        checkbox_instructions, checkbox_resource = render_prompt("checkbox-discovery.md")
+        local_checkbox_evidence = [
+            item.model_dump(mode="json")
+            for page in pages
+            for item in page.local_checkbox_candidates
+            if is_credible_checkbox_candidate(page, item)
+        ]
+        checkbox_candidate_pages = sorted({item["page"] for item in local_checkbox_evidence})
+        checkbox_instructions = ""
+        checkbox_resources: list[PromptResource] = []
+        if local_checkbox_evidence:
+            checkbox_instructions, checkbox_resource = render_prompt(
+                "checkbox-discovery.md",
+                candidate_pages=_prompt_json(checkbox_candidate_pages),
+                local_checkbox_evidence=_prompt_json(local_checkbox_evidence),
+            )
+            checkbox_resources.append(checkbox_resource)
+        semantic_region_count = 0
         for page in pages:
             full_context = page.page in full_context_pages
+            semantic_regions = _local_semantic_regions(page)
+            semantic_region_count += len(semantic_regions)
             blocks: list[str] = []
             for block in page.blocks:
                 block_context, resource = self._block_context(block, full_context)
                 blocks.append(block_context)
                 context_resources.append(resource)
             template = "page-context-full.md" if full_context else "page-context-compact.md"
+            layout_regions = [
+                region.model_dump(mode="json")
+                if full_context
+                else region.model_dump(mode="json", exclude={"coordinate", "polygon", "raw_order"})
+                for region in page.layout_regions
+            ]
             page_context, resource = render_prompt(
                 template,
                 page_number=page.page,
@@ -929,8 +1551,28 @@ class OpenAIRefiner:
                         "warnings": page.warnings,
                     }
                 ),
+                semantic_region_columns=_prompt_json(_LOCAL_SEMANTIC_REGION_COLUMNS),
+                semantic_regions=_prompt_json(semantic_regions),
                 block_columns=_prompt_json(_BLOCK_EVIDENCE_COLUMNS),
                 blocks="\n".join(blocks),
+                layout_regions=_prompt_json(layout_regions),
+                layout_links=_prompt_json(
+                    [link.model_dump(mode="json") for link in page.layout_block_links]
+                ),
+                reading_order=_prompt_json(
+                    page.reading_order_evidence.model_dump(mode="json")
+                    if page.reading_order_evidence
+                    else None
+                ),
+                table_structures=_prompt_json(
+                    [
+                        table.model_dump(
+                            mode="json",
+                            exclude=({"cells", "markdown"} if table.status != "valid" else None),
+                        )
+                        for table in page.table_structures
+                    ]
+                ),
             )
             lines.append(page_context)
             context_resources.append(resource)
@@ -949,7 +1591,7 @@ class OpenAIRefiner:
             resources=[
                 resource,
                 *capability_resources,
-                checkbox_resource,
+                *checkbox_resources,
                 *context_resources,
             ],
             metrics={
@@ -960,6 +1602,9 @@ class OpenAIRefiner:
                     len(block.text) for page in pages for block in page.blocks
                 ),
                 "block_count": sum(len(page.blocks) for page in pages),
+                "semantic_region_count": semantic_region_count,
+                "checkbox_candidate_pages": checkbox_candidate_pages,
+                "checkbox_candidate_count": len(local_checkbox_evidence),
                 "compact_pages": [
                     page.page for page in pages if page.page not in full_context_pages
                 ],
@@ -985,9 +1630,7 @@ class OpenAIRefiner:
 
     @staticmethod
     def _block_context(block: Any, full_context: bool) -> tuple[str, PromptResource]:
-        requires_gpt_review = (
-            block.ocr_score is not None and block.ocr_score < LOW_CONFIDENCE_THRESHOLD
-        )
+        requires_gpt_review = block_requires_gpt_review(block)
         return render_prompt(
             "block-context-full.md" if full_context else "block-context-compact.md",
             block_json=_prompt_json(

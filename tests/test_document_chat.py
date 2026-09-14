@@ -1,7 +1,7 @@
 from types import SimpleNamespace
 
 import pytest
-from pydantic import ValidationError
+from pydantic import BaseModel, Field, ValidationError
 
 from agentic_extractor.document_chat import (
     ChatTurn,
@@ -10,6 +10,7 @@ from agentic_extractor.document_chat import (
     recent_chat_history,
     retrieve_markdown_excerpts,
     safe_chat_text,
+    validate_processed_document,
 )
 from agentic_extractor.openai_refiner import OpenAIRefiner
 from agentic_extractor.prompt_resources import load_prompt
@@ -48,6 +49,30 @@ def test_processed_document_contract_rejects_original_file_content() -> None:
                 "original_bytes": b"source file",
             }
         )
+
+
+def test_processed_document_accepts_stale_model_instance_from_streamlit_session() -> None:
+    class PreviousProcessedMarkdownDocument(BaseModel):
+        document_id: str
+        display_name: str
+        markdown: str
+        selected_pages: list[int] = Field(default_factory=list)
+        processing_status: str = "Completed"
+        failed_pages: list[int] = Field(default_factory=list)
+
+    stale = PreviousProcessedMarkdownDocument(
+        document_id="one",
+        display_name="invoice.pdf",
+        markdown="# Invoice",
+        selected_pages=[1],
+    )
+    with pytest.raises(ValidationError):
+        ProcessedMarkdownDocument.model_validate(stale)
+
+    current = validate_processed_document(stale)
+
+    assert type(current) is ProcessedMarkdownDocument
+    assert current.document_id == "one"
 
 
 def test_long_document_retrieval_selects_relevant_markdown_within_budget() -> None:

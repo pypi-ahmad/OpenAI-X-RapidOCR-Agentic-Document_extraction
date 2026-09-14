@@ -1,4 +1,14 @@
-"""Evidence-based page quality diagnostics and bounded batch backoff."""
+"""Evidence-based page quality diagnostics and bounded batch backoff.
+
+Responsible for: diagnosing raw page image quality (sharpness, blur, contrast,
+skew angle) and applying strictly verifiable preprocessing (deskewing,
+auto-contrast) only if metrics improve. Also manages bounded batch backoff.
+
+Must not: apply speculative or degrading image transforms without verifying
+that target diagnostic metrics improved.
+
+Next: `pipeline.py`, which invokes `preprocess_if_improved` prior to OCR.
+"""
 
 from __future__ import annotations
 

@@ -1,25 +1,41 @@
-"""Versioned FastAPI surface backed by the canonical document workflow."""
+"""Versioned FastAPI surface backed by the canonical document workflow.
+
+Responsible for: exposing the versioned local HTTP API (`/api/v1/jobs/...`) for
+document parsing, schema extraction, status queries, and artifact downloads,
+backed by `workflow.py` and `pipeline.py`.
+
+Must not: implement extraction logic independently from `workflow.py`/`pipeline.py`,
+bypass the three-engine requirement (RapidOCR -> PP-DocLayoutV3 -> gpt-5.6-luna),
+expose secrets or raw credentials, or persist jobs across process restarts
+(uses in-memory storage with lazy TTL eviction).
+
+Next: `workflow.py` for the state machine execution behind these endpoints, and
+`artifacts.py` for how requested artifacts are assembled.
+"""
 
 from __future__ import annotations
 
 import base64
 import binascii
 import copy
-import hashlib
 import json
 import secrets
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
-from typing import Any, Literal
+from typing import Any
 
 from fastapi import FastAPI, HTTPException, Response, status
 from jsonschema import SchemaError
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from agentic_extractor.artifacts import LocalArtifacts, build_local_artifacts, build_local_bundle
+from agentic_extractor.artifacts import LocalArtifacts, build_local_artifacts
 from agentic_extractor.config import SETTINGS
+from agentic_extractor.layout import (
+    PPDocLayoutResource,
+    create_pp_doclayout_engine,
+)
 from agentic_extractor.models import (
     Capability,
     CheckboxCorrection,
@@ -65,6 +81,7 @@ class ParseJobRequest(BaseModel):
     mode: ProcessingMode = ProcessingMode.BALANCED
     selected_pages: list[int] | None = None
     enable_preprocessing: bool = False
+    include_atomic_grounding: bool = True
 
     @field_validator("content_base64")
     @classmethod
@@ -122,13 +139,11 @@ class JobStatus(BaseModel):
 
 
 class ParseResultPayload(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    model_config = ConfigDict(extra="forbid")
 
-    contract_version: Literal[3]
-    selected_pages: list[int]
     markdown: str
-    warnings: list[str] = Field(default_factory=list)
-    failed_pages: list[int] = Field(default_factory=list)
+    metadata: dict[str, Any]
+    structure: dict[str, Any]
 
 
 class ExtractionResult(BaseModel):
@@ -145,8 +160,9 @@ class ExtractionResult(BaseModel):
 
 class ArtifactMetadata(BaseModel):
     name: str
-    bytes: int
-    sha256: str
+    bytes: int | None = None
+    sha256: str | None = None
+    generated: bool
     download_url: str
 
 
@@ -169,16 +185,20 @@ class _Job:
 def create_app(
     *,
     ocr_resource: OCRResource | None = None,
+    layout_resource: PPDocLayoutResource | None = None,
     refiner: Refiner | None = None,
     clock: Callable[[], float] = time.monotonic,
 ) -> FastAPI:
     app = FastAPI(
         title="Agentic document extractor API",
         version="1.0.0",
-        description="Local-only API over the canonical RapidOCR and GPT-5.6-luna pipeline.",
+        description=(
+            "Local-only API over the canonical RapidOCR, PP-DocLayoutV3, and GPT-5.6-luna pipeline."
+        ),
     )
     jobs: dict[str, _Job] = {}
     resource: OCRResource | None = ocr_resource
+    layout: PPDocLayoutResource | None = layout_resource
     cloud_refiner: Refiner | None = refiner
 
     def get_resource() -> OCRResource:
@@ -193,7 +213,15 @@ def create_app(
             cloud_refiner = OpenAIRefiner()
         return cloud_refiner
 
-    def prepare_engines() -> tuple[Refiner, OCRResource]:
+    def get_layout() -> PPDocLayoutResource:
+        nonlocal layout
+        if layout is None:
+            layout = create_pp_doclayout_engine()
+        return layout
+
+    def prepare_engines() -> tuple[Refiner, OCRResource, PPDocLayoutResource, dict[str, float]]:
+        initialization_timings: dict[str, float] = {}
+        configuration_started = time.perf_counter()
         try:
             active_refiner = get_refiner()
             active_refiner.validate_configuration()
@@ -205,6 +233,10 @@ def create_app(
                 "Add valid OpenAI configuration and retry.",
                 retryable=True,
             ) from exc
+        initialization_timings["configuration_seconds"] = (
+            time.perf_counter() - configuration_started
+        )
+        rapidocr_initialization_started = time.perf_counter()
         try:
             active_resource = get_resource()
         except Exception as exc:
@@ -215,7 +247,24 @@ def create_app(
                 "Run 'uv sync --all-groups', then verify RapidOCR and ONNX Runtime.",
                 retryable=True,
             ) from exc
-        return active_refiner, active_resource
+        initialization_timings["rapidocr_initialization_seconds"] = (
+            time.perf_counter() - rapidocr_initialization_started
+        )
+        layout_initialization_started = time.perf_counter()
+        try:
+            active_layout = get_layout()
+        except Exception as exc:
+            raise _http_error(
+                503,
+                "pp_doclayout_unavailable",
+                str(exc),
+                "Run 'uv sync --project tools/pp_doclayout --locked', then verify Paddle.",
+                retryable=True,
+            ) from exc
+        initialization_timings["layout_initialization_seconds"] = (
+            time.perf_counter() - layout_initialization_started
+        )
+        return active_refiner, active_resource, active_layout, initialization_timings
 
     def find_job(job_id: str) -> _Job:
         return _find(job_id, jobs, now=clock())
@@ -229,7 +278,7 @@ def create_app(
         responses={503: {"model": ErrorResponse}},
     )
     def submit_parse(payload: ParseJobRequest) -> JobCreated:
-        active_refiner, active_resource = prepare_engines()
+        active_refiner, active_resource, active_layout, initialization_timings = prepare_engines()
         job_id = secrets.token_urlsafe(24)
         job = _Job(source_request=payload, created_at=clock())
         jobs[job_id] = job
@@ -240,7 +289,14 @@ def create_app(
             selected_pages=set(payload.selected_pages) if payload.selected_pages else None,
             enable_preprocessing=payload.enable_preprocessing,
         )
-        _run(job, request, active_refiner, lambda: active_resource)
+        _run(
+            job,
+            request,
+            active_refiner,
+            lambda: active_resource,
+            active_layout,
+            initialization_timings,
+        )
         return JobCreated(
             job_id=job_id,
             state=job.state,
@@ -342,17 +398,15 @@ def create_app(
     )
     def list_artifacts(job_id: str) -> ArtifactList:
         job = find_job(job_id)
-        payloads = _artifact_payloads(job)
+        artifacts = _require_artifacts(job)
         return ArtifactList(
             job_id=job_id,
             artifacts=[
                 ArtifactMetadata(
-                    name=name,
-                    bytes=len(content),
-                    sha256=hashlib.sha256(content).hexdigest(),
+                    **artifacts.artifact_metadata(name),
                     download_url=f"/api/v1/jobs/{job_id}/artifacts/{name}",
                 )
-                for name, (content, _) in payloads.items()
+                for name in _ARTIFACT_NAMES
             ],
         )
 
@@ -364,10 +418,9 @@ def create_app(
     )
     def download_artifact(job_id: str, artifact_name: str) -> Response:
         job = find_job(job_id)
-        payloads = _artifact_payloads(job)
-        if artifact_name not in payloads:
+        if artifact_name not in _ARTIFACT_NAMES:
             raise _http_error(404, "artifact_not_found", "Unknown artifact.")
-        content, media_type = payloads[artifact_name]
+        content, media_type = _artifact_payload(job, artifact_name)
         return Response(
             content,
             media_type=media_type,
@@ -382,16 +435,25 @@ def _run(
     request: DocumentRequest,
     refiner: Refiner,
     resource_provider: Callable[[], OCRResource],
+    layout_resource: PPDocLayoutResource,
+    initialization_timings: dict[str, float],
 ) -> None:
     job.state = JobState.PROCESSING
     try:
         refiner.validate_configuration()
         local, workflow = run_agent_workflow(
-            request, ocr_resource=resource_provider(), refiner=refiner
+            request,
+            ocr_resource=resource_provider(),
+            layout_resource=layout_resource,
+            refiner=refiner,
+            initialization_timings=initialization_timings,
         )
         job.local = local
         job.workflow = workflow
-        job.artifacts = build_local_artifacts(local)
+        job.artifacts = build_local_artifacts(
+            local,
+            include_atomic_grounding=job.source_request.include_atomic_grounding,
+        )
         job.state = JobState(workflow.current_state.value)
         job.error = None
     except Exception as exc:
@@ -412,7 +474,10 @@ def _run_from_parse(job: _Job, request: DocumentRequest, refiner: Refiner) -> No
         local, workflow = run_workflow_from_parse(copy.deepcopy(job.local), request, refiner)
         job.local = local
         job.workflow = workflow
-        job.artifacts = build_local_artifacts(local)
+        job.artifacts = build_local_artifacts(
+            local,
+            include_atomic_grounding=job.source_request.include_atomic_grounding,
+        )
         job.state = JobState(workflow.current_state.value)
         job.error = None
     except Exception as exc:
@@ -439,7 +504,16 @@ def _find(job_id: str, jobs: dict[str, _Job], *, now: float) -> _Job:
     return job
 
 
-def _artifact_payloads(job: _Job) -> dict[str, tuple[bytes, str]]:
+_ARTIFACT_NAMES = (
+    "document.md",
+    "parse-result.json",
+    "annotated.pdf",
+    "document.html",
+    "bundle.zip",
+)
+
+
+def _require_artifacts(job: _Job) -> LocalArtifacts:
     if job.artifacts is None or job.local is None:
         raise _http_error(
             409,
@@ -447,20 +521,25 @@ def _artifact_payloads(job: _Job) -> dict[str, tuple[bytes, str]]:
             "Artifacts are not available for this job.",
             "Wait for successful processing or review the job failure.",
         )
-    return {
-        "document.md": (job.artifacts.markdown, "text/markdown"),
-        "parse-result.json": (job.artifacts.parse_result, "application/json"),
-        "annotated.pdf": (job.artifacts.annotated_pdf, "application/pdf"),
-        "document.html": (job.artifacts.html, "text/html"),
-        "bundle.zip": (build_local_bundle(job.local), "application/zip"),
+    return job.artifacts
+
+
+def _artifact_payload(job: _Job, name: str) -> tuple[bytes, str]:
+    artifacts = _require_artifacts(job)
+    media_types = {
+        "document.md": "text/markdown",
+        "parse-result.json": "application/json",
+        "annotated.pdf": "application/pdf",
+        "document.html": "text/html",
+        "bundle.zip": "application/zip",
     }
+    return artifacts.get(name), media_types[name]
 
 
 def _status(job_id: str, jobs: dict[str, _Job], *, now: float) -> JobStatus:
     job = _find(job_id, jobs, now=now)
     local, workflow = job.local, job.workflow
     result = json.loads(job.artifacts.parse_result) if job.artifacts else None
-    names = ["document.md", "parse-result.json", "annotated.pdf", "document.html", "bundle.zip"]
     return JobStatus(
         job_id=job_id,
         state=job.state,
@@ -468,7 +547,7 @@ def _status(job_id: str, jobs: dict[str, _Job], *, now: float) -> JobStatus:
         failed_pages=local.failed_pages if local else [],
         review_required=workflow.review_required if workflow else [],
         result=result,
-        artifacts={name: f"/api/v1/jobs/{job_id}/artifacts/{name}" for name in names}
+        artifacts={name: f"/api/v1/jobs/{job_id}/artifacts/{name}" for name in _ARTIFACT_NAMES}
         if job.artifacts
         else {},
         error=job.error,

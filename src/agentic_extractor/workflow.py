@@ -1,4 +1,21 @@
-"""Constrained, evidence-gated document workflow."""
+"""Constrained, evidence-gated document workflow.
+
+Responsible for the ADE-style state machine (VALIDATED -> ... -> ACCEPTED |
+REVIEW_REQUIRED | FAILED), turning raw GPT ("cloud") proposals into
+`AgentWorkflowResult` only after grounding every proposal against immutable
+RapidOCR/PP-DocLayoutV3 evidence, and the bounded, targeted GPT repair path
+for REVIEW_REQUIRED output. Must not accept a classification, section, split,
+extracted field, or checkbox that cannot be traced back to a real block,
+chunk, or reviewed image region (see `_evidence`, `_checkbox_risks`) - GPT
+output is treated as untrusted until grounded here. Must not mutate raw OCR
+`Block`/`PageParse` evidence in place; corrections are recorded as separate
+audit objects (`FieldCorrection`, `CheckboxCorrection`).
+Callers: `api.py` (HTTP job execution) and the Streamlit `app_pages/`
+extraction pages, both via `run_agent_workflow` / `run_workflow_from_parse`.
+Consumers of this module's output: `artifacts.py` (renders `AgentWorkflowResult`
+into the manifest/ZIP) and `pipeline.py` (supplies the `LocalParseResult` this
+module refines).
+"""
 
 from __future__ import annotations
 
@@ -15,13 +32,25 @@ from jsonschema import Draft202012Validator, FormatChecker
 from PIL import Image
 from pydantic import BaseModel, Field
 
+from agentic_extractor.checkbox_vision import (
+    is_credible_checkbox_candidate,
+    is_visual_checkbox_candidate,
+)
 from agentic_extractor.costs import MODEL_NAME, aggregate_usage
+from agentic_extractor.layout import (
+    PPDocLayoutResource,
+    PPDocLayoutSetupError,
+    apply_document_layout,
+    create_pp_doclayout_engine,
+)
 from agentic_extractor.models import (
     Capability,
     CheckboxCorrection,
     CheckboxRecord,
     CheckboxState,
     DocumentRequest,
+    LocalCheckboxCandidate,
+    VisualReviewRegion,
 )
 from agentic_extractor.ocr import (
     LocalParseResult,
@@ -45,6 +74,8 @@ from agentic_extractor.pipeline import (
     refine_markdown_workflows,
     render_result_markdown,
 )
+from agentic_extractor.table_structure import table_review_bbox, table_review_block_ids
+from agentic_extractor.timing import record_stage_timing, stage_timing_summary
 
 
 class WorkflowState(StrEnum):
@@ -64,10 +95,17 @@ class RapidOCRSetupError(RuntimeError):
     """RapidOCR could not produce a local first pass."""
 
 
+_MIN_CHECKBOX_VERIFICATION_CONFIDENCE = 0.90
+
+
+# Append-only audit record for one state transition. `evaluate_workflow` emits
+# one of these per stage (see its nested `event()` helper) regardless of
+# outcome, so `AgentWorkflowResult.events` is a complete trace even for a
+# FAILED or REVIEW_REQUIRED run, not just successful ones.
 class WorkflowEvent(BaseModel):
     state: WorkflowState
     action: str
-    provider: Literal["system", "RapidOCR", "gpt-5.6-luna"] = "system"
+    provider: Literal["system", "RapidOCR", "PP-DocLayoutV3", "gpt-5.6-luna"] = "system"
     reason: str
     elapsed_seconds: float = 0
     token_impact: int = 0
@@ -182,11 +220,24 @@ def run_agent_workflow(
     request: DocumentRequest,
     *,
     ocr_resource: OCRResource | None = None,
+    layout_resource: PPDocLayoutResource | None = None,
     refiner: Refiner | None = None,
+    initialization_timings: dict[str, float] | None = None,
 ) -> tuple[LocalParseResult, AgentWorkflowResult]:
-    """Run required local parsing and GPT refinement, then deterministic adjudication."""
+    """Run required local parsing and GPT refinement, then deterministic adjudication.
+
+    This is the canonical FULL entry point: it always initializes RapidOCR and
+    PP-DocLayoutV3 and re-parses `request` from scratch. To refine/adjudicate a
+    `LocalParseResult` that has already been parsed (e.g. the API's schema-extraction
+    endpoint), call `run_workflow_from_parse` directly instead - it must not
+    reach this function, or OCR/layout would silently run a second time.
+    """
+    started = time.perf_counter()
     cloud_refiner = refiner or OpenAIRefiner()
+    configuration_started = time.perf_counter()
     cloud_refiner.validate_configuration()
+    configuration_seconds = time.perf_counter() - configuration_started
+    rapidocr_initialization_started = time.perf_counter()
     try:
         resource = ocr_resource or create_rapidocr_engine()
     except Exception as exc:
@@ -194,14 +245,47 @@ def run_agent_workflow(
             "RapidOCR could not initialize. Run 'uv sync --all-groups' and verify ONNX "
             "Runtime setup."
         ) from exc
+    rapidocr_initialization_seconds = time.perf_counter() - rapidocr_initialization_started
     local = _process_local_document(request, ocr_resource=resource)
+    for key, elapsed in (initialization_timings or {}).items():
+        record_stage_timing(local.timings, key, elapsed)
+    record_stage_timing(local.timings, "configuration_seconds", configuration_seconds)
+    record_stage_timing(
+        local.timings, "rapidocr_initialization_seconds", rapidocr_initialization_seconds
+    )
     local.ocr_attempts = [_ocr_attempt(page, 1) for page in local.pages]
+    retry_started = time.perf_counter()
     _retry_failed_pages_once(local, resource)
+    record_stage_timing(local.timings, "ocr_retry_seconds", time.perf_counter() - retry_started)
     if local.failed_pages and len(local.failed_pages) == len(local.selected_pages):
         raise RapidOCRSetupError(
             "RapidOCR failed on every selected page. Verify models and ONNX Runtime setup."
         )
-    return run_workflow_from_parse(local, request, cloud_refiner, validate_configuration=False)
+    try:
+        layout_initialization_started = time.perf_counter()
+        active_layout = layout_resource or create_pp_doclayout_engine()
+        record_stage_timing(
+            local.timings,
+            "layout_initialization_seconds",
+            time.perf_counter() - layout_initialization_started,
+        )
+        apply_document_layout(local, None, active_layout)
+    except PPDocLayoutSetupError:
+        raise
+    except Exception as exc:
+        raise PPDocLayoutSetupError(
+            "PP-DocLayoutV3 could not process every selected page. Run "
+            "'uv sync --project tools/pp_doclayout --locked', verify the Paddle runtime, "
+            "and retry."
+        ) from exc
+    workflow_started = time.perf_counter()
+    result, workflow = run_workflow_from_parse(
+        local, request, cloud_refiner, validate_configuration=False
+    )
+    result.timings["workflow_seconds"] = time.perf_counter() - workflow_started
+    result.timings["total_seconds"] = time.perf_counter() - started
+    result.adaptive_processing["stage_timing"] = stage_timing_summary(result.timings)
+    return result, workflow
 
 
 def run_workflow_from_parse(
@@ -211,40 +295,90 @@ def run_workflow_from_parse(
     *,
     validate_configuration: bool = True,
 ) -> tuple[LocalParseResult, AgentWorkflowResult]:
-    """Run GPT analysis and adjudication on an existing canonical Parse result."""
+    """Run GPT analysis and adjudication on an existing canonical Parse result.
+
+    Must NOT re-run RapidOCR or PP-DocLayoutV3: `local` is trusted as already
+    parsed. This is what lets schema extraction (`api.py`'s extract endpoint)
+    reuse a prior Parse without paying for OCR again - accidentally calling
+    `_process_local_document` or similar from here would double engine cost
+    and break that reuse contract.
+    """
+    started = time.perf_counter()
     cloud_refiner = refiner or OpenAIRefiner()
     if validate_configuration:
+        configuration_started = time.perf_counter()
         cloud_refiner.validate_configuration()
+        record_stage_timing(
+            local.timings,
+            "configuration_seconds",
+            time.perf_counter() - configuration_started,
+        )
     if local.cloud_output and request.capabilities - {Capability.PARSE}:
         local, _ = refine_markdown_workflows(local, request, cloud_refiner)
     elif not local.cloud_output:
         local = refine_local_parse(local, request, cloud_refiner)
     cloud = CloudResult.model_validate(local.cloud_output) if local.cloud_output else None
     if cloud is not None:
-        risky = _risky_checkbox_candidates(local, cloud)
+        # Only send a checkbox candidate for the paid Luna crop-verification call
+        # if the *page* already has independent local (OpenCV+OCR) corroboration;
+        # this bounds verification cost and keeps ungrounded Luna-only guesses out
+        # of the crop-review request entirely (they still surface as review items
+        # via `_checkbox_risks`, they just never reach `verify_checkboxes`).
+        credible_pages = {
+            page.page
+            for page in local.pages
+            if any(
+                is_credible_checkbox_candidate(page, candidate)
+                for candidate in page.local_checkbox_candidates
+            )
+        }
+        candidates = [
+            candidate
+            for candidate in _checkbox_candidates(local, cloud)
+            if candidate.page in credible_pages
+        ]
         verify = getattr(cloud_refiner, "verify_checkboxes", None)
-        if risky and callable(verify):
-            try:
-                verified, verification_usage = verify(local.pages, risky)
-                local.usage = aggregate_usage([local.usage, verification_usage])
-                local.checkbox_verifications = [
-                    item.model_dump(mode="json") for item in verified.verifications
+        if candidates and callable(verify):
+            verification_started = time.perf_counter()
+            page_map = {page.page: page for page in local.pages}
+            # One bounded Luna call per page (not one big batch): keeps each crop-
+            # verification request small, and a single page's failure (caught below)
+            # only removes that page's checkboxes from automation - it does not
+            # abort verification for the rest of the document.
+            for page_number in dict.fromkeys(candidate.page for candidate in candidates):
+                page_candidates = [
+                    candidate for candidate in candidates if candidate.page == page_number
                 ]
-                local.cloud_attempts.append(
-                    {
-                        "attempt": len(local.cloud_attempts) + 1,
-                        "purpose": "checkbox_verification",
-                        "output": {"verifications": local.checkbox_verifications},
-                    }
-                )
-            except Exception as exc:
-                local.warnings.append(
-                    "Bounded checkbox verification failed; human review is required: "
-                    f"{type(exc).__name__}."
-                )
+                try:
+                    verified, verification_usage = verify([page_map[page_number]], page_candidates)
+                    local.usage = aggregate_usage([local.usage, verification_usage])
+                    batch_verifications = [
+                        item.model_dump(mode="json") for item in verified.verifications
+                    ]
+                    local.checkbox_verifications.extend(batch_verifications)
+                    local.cloud_attempts.append(
+                        {
+                            "attempt": len(local.cloud_attempts) + 1,
+                            "purpose": "checkbox_verification",
+                            "pages": [page_number],
+                            "output": {"verifications": batch_verifications},
+                        }
+                    )
+                except Exception as exc:
+                    local.warnings.append(
+                        f"Bounded checkbox verification failed for page {page_number}; human "
+                        f"review is required: {type(exc).__name__}."
+                    )
+            record_stage_timing(
+                local.timings,
+                "checkbox_verification_seconds",
+                time.perf_counter() - verification_started,
+            )
     workflow = evaluate_workflow(local, request, cloud)
     retryable = [
-        item for item in workflow.review_items if item.retryable and item.stage != "checkbox"
+        item
+        for item in workflow.review_items
+        if item.retryable and item.stage != "checkbox" and item.source_ids
     ]
     optional_capabilities = {capability.value for capability in request.capabilities} - {"Parse"}
     markdown_repair = getattr(cloud_refiner, "refine_markdown", None)
@@ -253,40 +387,44 @@ def run_workflow_from_parse(
         if optional_capabilities and callable(markdown_repair)
         else getattr(cloud_refiner, "repair", None)
     )
+    repair_scope = (
+        _object_repair_scope(local, request, cloud, retryable) if cloud is not None else None
+    )
     if (
         workflow.current_state is WorkflowState.REVIEW_REQUIRED
         and retryable
         and cloud is not None
         and callable(repair)
+        and repair_scope is not None
     ):
-        retry_pages = (
-            set()
-            if repair is markdown_repair
-            else set(local.cloud_image_pages) or set(local.selected_pages)
+        repair_started = time.perf_counter()
+        repair_markdown, repair_pages, repair_capabilities, repair_schema, repair_prior = (
+            repair_scope
         )
         try:
             issues = [item.model_dump(mode="json") for item in retryable]
             if repair is markdown_repair:
                 repaired, repair_usage = repair(
-                    local.markdown,
-                    local.pages,
-                    optional_capabilities,
+                    repair_markdown,
+                    repair_pages,
+                    repair_capabilities,
                     request.allowed_classes,
-                    request.extraction_schema,
+                    repair_schema,
                     issues=issues,
-                    prior=cloud,
+                    prior=repair_prior,
                 )
             else:
+                image_pages = {page.page for page in repair_pages if page.visual_review_regions}
                 repaired, repair_usage = repair(
-                    local.pages,
-                    retry_pages,
-                    {capability.value for capability in request.capabilities},
+                    repair_pages,
+                    image_pages,
+                    repair_capabilities,
                     request.allowed_classes,
-                    request.extraction_schema,
+                    repair_schema,
                     issues,
-                    cloud,
+                    repair_prior,
                 )
-            merged = _merge_repair(cloud, repaired, request.capabilities)
+            merged = _merge_repair(cloud, repaired, request.capabilities, repair_items=retryable)
             local.usage = aggregate_usage([local.usage, repair_usage])
             local.cloud_output = merged.model_dump(mode="json")
             local.cloud_attempts.append(
@@ -296,9 +434,13 @@ def run_workflow_from_parse(
                     "output": local.cloud_output,
                 }
             )
-            local.markdown, local.refinements, refinement_warnings = _apply_refinements(
-                local.pages, merged, retry_pages
-            )
+            (
+                local.markdown,
+                local.refinements,
+                refinement_warnings,
+                table_reviews,
+            ) = _apply_refinements(local.pages, merged, set(local.cloud_image_pages))
+            local.document_metadata["table_reviews"] = table_reviews
             local.warnings.extend(refinement_warnings)
             repaired_workflow = evaluate_workflow(local, request, merged)
             repaired_workflow.events = [
@@ -307,7 +449,7 @@ def run_workflow_from_parse(
                     state=WorkflowState.REVIEW_REQUIRED,
                     action="request_deeper_gpt_refinement",
                     provider=MODEL_NAME,
-                    reason=f"One bounded repair targeted {len(retryable)} review item(s).",
+                    reason=f"One object-specific repair targeted {len(retryable)} object(s).",
                     token_impact=repair_usage.total_tokens or 0,
                     cost_impact_usd=repair_usage.total_cost_usd,
                 ),
@@ -335,32 +477,90 @@ def run_workflow_from_parse(
                     reason=message,
                 )
             )
+        record_stage_timing(
+            local.timings, "object_repair_seconds", time.perf_counter() - repair_started
+        )
+    finalization_started = time.perf_counter()
     local.workflow_manifest = workflow.manifest()
     local.checkboxes = workflow.checkboxes
     local.checkbox_corrections = workflow.checkbox_corrections
     local.markdown = render_result_markdown(local)
+    local.warnings = list(dict.fromkeys(local.warnings))
+    record_stage_timing(
+        local.timings,
+        "result_finalization_seconds",
+        time.perf_counter() - finalization_started,
+    )
+    local.timings["workflow_seconds"] = time.perf_counter() - started
+    local.adaptive_processing["stage_timing"] = stage_timing_summary(local.timings)
     return local, workflow
 
 
 def _merge_repair(
-    original: CloudResult, repaired: CloudResult, capabilities: set[Capability]
+    original: CloudResult,
+    repaired: CloudResult,
+    capabilities: set[Capability],
+    *,
+    repair_items: list[ReviewItem] | None = None,
 ) -> CloudResult:
-    """Replace only requested derived stages; raw OCR remains outside this layer."""
+    """Replace only identified repair objects; raw OCR remains outside this layer."""
     merged = original.model_copy(deep=True)
-    merged.reviewed_pages = repaired.reviewed_pages
+    targets = _repair_targets(repair_items or [])
+    merged.reviewed_pages = list(
+        dict.fromkeys([*original.reviewed_pages, *repaired.reviewed_pages])
+    )
     merged.warnings.extend(repaired.warnings)
-    if repaired.refined_markdown:
+    if repaired.refined_markdown and not repair_items:
         merged.refined_markdown = repaired.refined_markdown
     if repaired.refinements:
-        merged.refinements = repaired.refinements
-    if Capability.CLASSIFY in capabilities:
-        merged.classifications = repaired.classifications
-    if Capability.SECTION in capabilities:
-        merged.sections = repaired.sections
-    if Capability.SPLIT in capabilities:
-        merged.splits = repaired.splits
+        repaired_refinements = {(item.page, item.block_id): item for item in repaired.refinements}
+        merged.refinements = [
+            repaired_refinements.pop((item.page, item.block_id), item)
+            for item in original.refinements
+        ]
+        merged.refinements.extend(repaired_refinements.values())
+    if repaired.table_reviews:
+        repaired_tables = {
+            (review.page, review.table_id): review for review in repaired.table_reviews
+        }
+        merged.table_reviews = [
+            repaired_tables.pop((review.page, review.table_id), review)
+            for review in original.table_reviews
+        ]
+        merged.table_reviews.extend(repaired_tables.values())
+    if repaired.semantic_regions:
+        repaired_pages = {item.page for item in repaired.semantic_regions}
+        merged.semantic_regions = [
+            item for item in original.semantic_regions if item.page not in repaired_pages
+        ]
+        merged.semantic_regions.extend(repaired.semantic_regions)
+    if Capability.CLASSIFY in capabilities and targets.get("classify"):
+        repaired_items = (
+            repaired.classifications
+            if len(repaired.classifications) <= len(targets["classify"])
+            else []
+        )
+        merged.classifications = [
+            item for item in original.classifications if item.label not in targets["classify"]
+        ]
+        merged.classifications.extend(repaired_items)
+    if Capability.SECTION in capabilities and targets.get("section"):
+        repaired_items = (
+            repaired.sections if len(repaired.sections) <= len(targets["section"]) else []
+        )
+        merged.sections = [
+            item for item in original.sections if item.title not in targets["section"]
+        ]
+        merged.sections.extend(repaired_items)
+    if Capability.SPLIT in capabilities and targets.get("split"):
+        repaired_items = repaired.splits if len(repaired.splits) <= len(targets["split"]) else []
+        merged.splits = [item for item in original.splits if item.name not in targets["split"]]
+        merged.splits.extend(repaired_items)
     if Capability.EXTRACT in capabilities:
-        repaired_by_path = {item.path: item for item in repaired.extracted_fields}
+        field_targets = targets.get("extract", set())
+        repaired_by_path = {
+            item.path: item for item in repaired.extracted_fields if item.path in field_targets
+        }
         merged.extracted_fields = [
             repaired_by_path.get(item.path, item) for item in original.extracted_fields
         ]
@@ -370,6 +570,248 @@ def _merge_repair(
             if path not in {field.path for field in original.extracted_fields}
         )
     return merged
+
+
+def _repair_targets(items: list[ReviewItem]) -> dict[str, set[str]]:
+    targets: dict[str, set[str]] = {}
+    for item in items:
+        if item.source_ids:
+            targets.setdefault(item.stage, set()).update(item.source_ids)
+    return targets
+
+
+def _cloud_for_objects(cloud: CloudResult, targets: dict[str, set[str]]) -> CloudResult:
+    """Project prior derived proposals to exact validation objects."""
+    parse_ids = targets.get("parse", set())
+    return CloudResult(
+        refined_markdown="",
+        reviewed_pages=[],
+        refinements=[item for item in cloud.refinements if item.block_id in parse_ids],
+        warnings=[],
+        classifications=[
+            item for item in cloud.classifications if item.label in targets.get("classify", set())
+        ],
+        sections=[item for item in cloud.sections if item.title in targets.get("section", set())],
+        splits=[item for item in cloud.splits if item.name in targets.get("split", set())],
+        extracted_fields=[
+            item for item in cloud.extracted_fields if item.path in targets.get("extract", set())
+        ],
+        table_reviews=[
+            item for item in cloud.table_reviews if item.table_id in targets.get("parse", set())
+        ],
+        semantic_regions=[
+            item
+            for item in cloud.semantic_regions
+            if item.id in parse_ids or bool(set(item.source_block_ids) & parse_ids)
+        ],
+    )
+
+
+def _object_repair_scope(
+    local: LocalParseResult,
+    request: DocumentRequest,
+    cloud: CloudResult,
+    items: list[ReviewItem],
+) -> tuple[str, list[Any], set[str], dict[str, Any] | None, CloudResult] | None:
+    """Build a Markdown/evidence packet containing only identified repair objects."""
+    targets = _repair_targets(items)
+    if not targets:
+        return None
+    prior = _cloud_for_objects(cloud, targets)
+    direct_blocks: set[str] = set(targets.get("parse", set()))
+    direct_chunks: set[str] = set()
+    targeted_tables: dict[int, list[Any]] = {}
+    table_ids = targets.get("parse", set())
+    for page in local.pages:
+        for table in page.table_structures:
+            if table.id not in table_ids:
+                continue
+            targeted_tables.setdefault(page.page, []).append(table)
+            direct_blocks.update(table_review_block_ids(page, table))
+    for evidence in _cloud_evidence(prior):
+        if evidence.block_id:
+            direct_blocks.add(evidence.block_id)
+        if evidence.chunk_id:
+            direct_chunks.add(evidence.chunk_id)
+    for section in prior.sections:
+        direct_blocks.update(section.source_block_ids)
+        direct_chunks.update(section.source_chunk_ids)
+
+    terms = _repair_query_terms(items, request, targets)
+    candidates: list[tuple[int, Any, Any]] = []
+    for page in local.pages:
+        for chunk in page.chunks or build_layout_chunks(page.blocks):
+            score = (
+                100
+                if chunk.id in direct_chunks or direct_blocks & set(chunk.source_block_ids)
+                else 0
+            )
+            lowered = chunk.text.casefold()
+            score += sum(lowered.count(term) for term in terms)
+            candidates.append((score, page, chunk))
+    selected: list[tuple[Any, Any]] = []
+    used_ids: set[str] = set()
+    used_characters = 0
+    for score, page, chunk in sorted(candidates, key=lambda item: item[0], reverse=True):
+        if score <= 0 or chunk.id in used_ids or len(selected) >= 8:
+            continue
+        size = len(chunk.markdown or chunk.text)
+        if selected and used_characters + size > 12_000:
+            continue
+        selected.append((page, chunk))
+        used_ids.add(chunk.id)
+        used_characters += size
+    if not selected:
+        return None
+
+    scoped_pages: list[Any] = []
+    markdown_parts: list[str] = []
+    for page in local.pages:
+        page_chunks = [
+            chunk for candidate_page, chunk in selected if candidate_page.page == page.page
+        ]
+        if not page_chunks:
+            continue
+        scoped = copy.deepcopy(page)
+        scoped.chunks = page_chunks
+        block_ids = {block_id for chunk in page_chunks for block_id in chunk.source_block_ids}
+        scoped.blocks = [block for block in scoped.blocks if block.id in block_ids]
+        scoped.layout_block_links = [
+            link for link in scoped.layout_block_links if link.block_id in block_ids
+        ]
+        layout_ids = {link.primary_region_id for link in scoped.layout_block_links}
+        scoped.layout_regions = [
+            region for region in scoped.layout_regions if region.id in layout_ids
+        ]
+        scoped.table_structures = [
+            table
+            for table in scoped.table_structures
+            if table.id in targets.get("parse", set())
+            or any(
+                cell.source_block_ids and block_ids & set(cell.source_block_ids)
+                for cell in table.cells
+            )
+        ]
+        scoped.local_checkbox_candidates = [
+            item
+            for item in scoped.local_checkbox_candidates
+            if item.id in targets.get("checkbox", set())
+        ]
+        scoped.local_redaction_candidates = [
+            item
+            for item in scoped.local_redaction_candidates
+            if item.id in targets.get("parse", set())
+        ]
+        scoped.visual_review_regions = [
+            region
+            for region in scoped.visual_review_regions
+            if set(region.source_block_ids) & block_ids
+            or set(region.source_redaction_ids) & targets.get("parse", set())
+        ]
+        for table in targeted_tables.get(page.page, []):
+            source_ids = sorted(table_review_block_ids(page, table))
+            scoped.visual_review_regions.append(
+                VisualReviewRegion(
+                    id=f"{table.id}-repair",
+                    page=page.page,
+                    bbox=table_review_bbox(page, table),
+                    reason_codes=["table_structure_review"],
+                    source_block_ids=source_ids,
+                    source_layout_region_ids=[table.layout_region_id],
+                )
+            )
+        scoped.reading_order_evidence = None
+        scoped.raw_evidence = {}
+        scoped.layout_raw_evidence = {}
+        scoped_pages.append(scoped)
+        markdown_parts.append(
+            f"<!-- page: {page.page} -->\n\n"
+            + "\n\n".join(chunk.markdown or chunk.text for chunk in page_chunks)
+        )
+    capabilities = {
+        {
+            "classify": "Classify",
+            "section": "Section",
+            "split": "Split",
+            "extract": "Extract",
+            "parse": "Parse",
+        }[stage]
+        for stage in targets
+        if stage in {"classify", "section", "split", "extract", "parse"}
+    }
+    return (
+        "\n\n".join(markdown_parts),
+        scoped_pages,
+        capabilities,
+        _repair_schema(request.extraction_schema, targets.get("extract", set())),
+        prior,
+    )
+
+
+def _cloud_evidence(cloud: CloudResult) -> list[CloudEvidence]:
+    evidence = [item for value in cloud.classifications for item in value.evidence]
+    evidence.extend(item for value in cloud.splits for item in value.evidence)
+    evidence.extend(item for value in cloud.extracted_fields for item in value.evidence)
+    evidence.extend(item for value in cloud.refinements for item in value.evidence)
+    evidence.extend(item for value in cloud.table_reviews for item in value.evidence)
+    return evidence
+
+
+def _repair_query_terms(
+    items: list[ReviewItem], request: DocumentRequest, targets: dict[str, set[str]]
+) -> set[str]:
+    values = [item.message for item in items]
+    properties = (request.extraction_schema or {}).get("properties", {})
+    for path in targets.get("extract", set()):
+        values.append(path.replace("_", " "))
+        definition = properties.get(path, {})
+        values.extend(str(definition.get(key, "")) for key in ("title", "description"))
+    ignored = {"field", "required", "review", "uncertain", "invalid", "abstained", "schema"}
+    return {
+        term
+        for value in values
+        for term in re.findall(r"[a-z0-9]+", value.casefold().replace("_", " "))
+        if len(term) > 2 and term not in ignored
+    }
+
+
+def _repair_schema(schema: dict[str, Any] | None, field_targets: set[str]) -> dict[str, Any] | None:
+    if not schema or not field_targets:
+        return None
+    scoped = copy.deepcopy(schema)
+    properties = scoped.get("properties", {})
+    scoped["properties"] = {
+        name: definition for name, definition in properties.items() if name in field_targets
+    }
+    scoped["required"] = [name for name in scoped.get("required", []) if name in field_targets]
+    return scoped
+
+
+def _cloud_for_pages(cloud: CloudResult, pages: set[int]) -> CloudResult:
+    """Project prior proposals to the pages in one bounded repair request."""
+
+    def overlaps(page_start: int, page_end: int) -> bool:
+        return any(page_start <= page <= page_end for page in pages)
+
+    return CloudResult(
+        refined_markdown="",
+        reviewed_pages=[page for page in cloud.reviewed_pages if page in pages],
+        refinements=[item for item in cloud.refinements if item.page in pages],
+        warnings=[],
+        classifications=[
+            item for item in cloud.classifications if overlaps(item.page_start, item.page_end)
+        ],
+        sections=[item for item in cloud.sections if overlaps(item.page_start, item.page_end)],
+        splits=[item for item in cloud.splits if overlaps(item.page_start, item.page_end)],
+        extracted_fields=[
+            item
+            for item in cloud.extracted_fields
+            if any(evidence.page in pages for evidence in item.evidence)
+        ],
+        checkboxes=[item for item in cloud.checkboxes if item.page in pages],
+        table_reviews=[item for item in cloud.table_reviews if item.page in pages],
+        semantic_regions=[item for item in cloud.semantic_regions if item.page in pages],
+    )
 
 
 def evaluate_workflow(
@@ -397,7 +839,7 @@ def evaluate_workflow(
         state: WorkflowState,
         action: str,
         reason: str,
-        provider: Literal["system", "RapidOCR", "gpt-5.6-luna"] = "system",
+        provider: Literal["system", "RapidOCR", "PP-DocLayoutV3", "gpt-5.6-luna"] = "system",
     ) -> None:
         events.append(
             WorkflowEvent(
@@ -416,6 +858,18 @@ def evaluate_workflow(
         WorkflowState.NORMALIZED, "normalize", "Source pages normalized without changing evidence."
     )
     event(WorkflowState.PARSED, "parse", "RapidOCR evidence preserved.", "RapidOCR")
+    event(
+        WorkflowState.PARSED,
+        "analyze_layout",
+        "PP-DocLayoutV3 region and reading-order evidence preserved.",
+        "PP-DocLayoutV3",
+    )
+    event(
+        WorkflowState.PARSED,
+        "detect_table_structure",
+        "Detected table cells were grounded in immutable RapidOCR blocks before GPT refinement.",
+        "PP-DocLayoutV3",
+    )
     if retries := local.document_metadata.get("local_retry_pages"):
         event(
             WorkflowState.PARSED,
@@ -591,6 +1045,11 @@ def evaluate_workflow(
         review.extend(checkbox_rule_errors)
     if local.failed_pages:
         review.append(f"Failed pages require review: {local.failed_pages}")
+    table_reviews = local.document_metadata.get("table_reviews", [])
+    if isinstance(table_reviews, list):
+        for item in table_reviews:
+            if isinstance(item, dict) and item.get("status") != "accepted":
+                review.append(f"Table {item.get('table_id')} requires review: {item.get('reason')}")
     block_reviews = local.document_metadata.get("low_confidence_block_reviews", [])
     if isinstance(block_reviews, list):
         for item in block_reviews:
@@ -611,7 +1070,7 @@ def evaluate_workflow(
         else ("require_human_review" if final is WorkflowState.REVIEW_REQUIRED else "accept")
     )
     event(final, action, errors[0] if errors else (review[0] if review else "All checks passed."))
-    return AgentWorkflowResult(
+    result = AgentWorkflowResult(
         current_state=final,
         events=events,
         classifications=classifications,
@@ -625,6 +1084,8 @@ def evaluate_workflow(
         schema_version=_schema_version(request.extraction_schema),
         business_rules=copy.deepcopy(request.business_rules),
     )
+    record_stage_timing(local.timings, "workflow_validation_seconds", time.perf_counter() - started)
+    return result
 
 
 def record_user_override(
@@ -741,6 +1202,7 @@ def _ocr_attempt(page: Any, attempt: int) -> dict[str, object]:
         "page": page.page,
         "attempt": attempt,
         "status": page.status,
+        "cache_hit": page.ocr_cache_hit,
         "raw_evidence": copy.deepcopy(page.raw_evidence),
         "warnings": list(page.warnings),
         "block_ids": [block.id for block in page.blocks],
@@ -924,7 +1386,7 @@ def _extract(
             value=proposed.value,
             normalized_value=normalized,
             source_text=_source_text(block, pages.get(evidence.page) if evidence else None),
-            engine_provenance=["RapidOCR", MODEL_NAME],
+            engine_provenance=["RapidOCR", "PP-DocLayoutV3", MODEL_NAME],
             status=status,
             confidence=proposed.confidence,
             source_page=evidence.page if evidence else None,
@@ -1109,8 +1571,56 @@ def _checkbox_label(
             or source_text.casefold() in candidate.label.casefold()
         )
     )
+    semantic_label = candidate.label.strip()
+    source_bbox = block.bbox if block is not None else chunk.bbox if chunk is not None else None
+    label_bbox = candidate.label_bbox
+    geometry_grounded = False
+    if (
+        label_bbox is not None
+        and source_bbox is not None
+        and _valid_checkbox_bbox(label_bbox)
+        and _valid_checkbox_bbox(source_bbox)
+    ):
+        vertical_overlap = max(
+            0.0,
+            min(candidate.control_bbox[3], label_bbox[3])
+            - max(candidate.control_bbox[1], label_bbox[1]),
+        )
+        minimum_height = min(
+            candidate.control_bbox[3] - candidate.control_bbox[1],
+            label_bbox[3] - label_bbox[1],
+        )
+        horizontal_gap = label_bbox[0] - candidate.control_bbox[2]
+        label_width = label_bbox[2] - label_bbox[0]
+        relative_control_center = (
+            ((candidate.control_bbox[0] + candidate.control_bbox[2]) / 2 - label_bbox[0])
+            / label_width
+            if label_width > 0
+            else 0.0
+        )
+        control_inside_label = (
+            label_bbox[0] <= candidate.control_bbox[0]
+            and label_bbox[2] >= candidate.control_bbox[2]
+            and relative_control_center >= 0.55
+        )
+        label_center = (
+            (label_bbox[0] + label_bbox[2]) / 2,
+            (label_bbox[1] + label_bbox[3]) / 2,
+        )
+        geometry_grounded = bool(
+            minimum_height > 0
+            and vertical_overlap / minimum_height >= 0.5
+            and (control_inside_label or -0.04 <= horizontal_gap <= 0.04)
+            and label_bbox[2] >= candidate.control_bbox[2]
+            and source_bbox[0] - 0.01 <= label_center[0] <= source_bbox[2] + 0.01
+            and source_bbox[1] - 0.01 <= label_center[1] <= source_bbox[3] + 0.01
+        )
     if candidate.page not in pages or not (block or chunk) or not cited or not label_matches:
         risks.append("no unique RapidOCR label grounding")
+    if not any(character.isalpha() for character in semantic_label):
+        risks.append("checkbox label contains no alphabetic text")
+    if not geometry_grounded:
+        risks.append("checkbox label is not geometrically grounded to the control")
     return block, chunk, risks
 
 
@@ -1136,41 +1646,94 @@ def _checkbox_risks(
         risks.append("label geometry is invalid")
     if candidate.state not in {"CHECKED", "UNCHECKED"}:
         risks.append(f"state is {candidate.state}")
-    if candidate.confidence is None or candidate.confidence < 0.98:
-        risks.append("discovery confidence is below 0.98")
     _, _, label_risks = _checkbox_label(candidate, pages, blocks, chunks)
     risks.extend(label_risks)
     risks.extend(_checkbox_quality_risks(local, candidate.page))
     return risks
 
 
-def _risky_checkbox_candidates(local: LocalParseResult, cloud: CloudResult) -> list[CloudCheckbox]:
-    pages = {page.page: page for page in local.pages}
-    blocks = {block.id: block for page in local.pages for block in page.blocks}
-    chunks = {
-        chunk.id: chunk
-        for page in local.pages
-        for chunk in (page.chunks or build_layout_chunks(page.blocks))
-    }
-    visual_pages = {page.page for page in local.pages}
-    overlap_ids: set[str] = set()
-    for index, candidate in enumerate(cloud.checkboxes):
-        for other in cloud.checkboxes[index + 1 :]:
-            if (
-                candidate.page == other.page
-                and _bbox_iou(candidate.control_bbox, other.control_bbox) > 0.5
+def _checkbox_candidates(local: LocalParseResult, cloud: CloudResult) -> list[CloudCheckbox]:
+    """Return Luna discoveries plus local proposals that can pass consensus."""
+    candidates: list[CloudCheckbox] = []
+    seen: set[str] = set()
+    for candidate in cloud.checkboxes:
+        if candidate.id not in seen:
+            candidates.append(candidate)
+            seen.add(candidate.id)
+    for page in local.pages:
+        for candidate in page.local_checkbox_candidates:
+            if not is_credible_checkbox_candidate(page, candidate):
+                continue
+            if any(
+                item.page == candidate.page
+                and _bbox_iou(item.control_bbox, candidate.control_bbox) > 0.5
+                for item in candidates
             ):
-                overlap_ids.update((candidate.id, other.id))
-    return [
-        candidate
-        for candidate in cloud.checkboxes
-        if _valid_checkbox_bbox(candidate.control_bbox)
-        and candidate.page in pages
-        and (
-            candidate.id in overlap_ids
-            or _checkbox_risks(local, candidate, pages, blocks, chunks, visual_pages)
-        )
+                continue
+            identifier = candidate.id
+            if identifier in seen:
+                identifier = f"{identifier}-local"
+            label_bbox = candidate.label_bbox or next(
+                (
+                    block.bbox
+                    for block in page.blocks
+                    if block.id == candidate.label_block_id and block.bbox is not None
+                ),
+                None,
+            )
+            if label_bbox is None:
+                label_bbox = next(
+                    (
+                        chunk.bbox
+                        for chunk in page.chunks
+                        if chunk.id == candidate.label_chunk_id and chunk.bbox is not None
+                    ),
+                    None,
+                )
+            candidates.append(
+                CloudCheckbox(
+                    id=identifier,
+                    page=candidate.page,
+                    label=candidate.source_text or "",
+                    state=candidate.state.value,
+                    control_bbox=candidate.control_bbox,
+                    label_bbox=label_bbox,
+                    label_block_id=candidate.label_block_id,
+                    label_chunk_id=candidate.label_chunk_id,
+                    confidence=candidate.detector_score,
+                    reason="OpenCV-only proposal; Luna discovery did not independently match it.",
+                    evidence=(
+                        [
+                            CloudEvidence(
+                                page=candidate.page,
+                                block_id=candidate.label_block_id,
+                                chunk_id=candidate.label_chunk_id,
+                                quote=candidate.source_text or "",
+                            )
+                        ]
+                        if candidate.source_text
+                        else []
+                    ),
+                )
+            )
+            seen.add(identifier)
+    return candidates
+
+
+def _matching_local_checkbox(
+    local: LocalParseResult, candidate: CloudCheckbox
+) -> LocalCheckboxCandidate | None:
+    matches = [
+        item
+        for page in local.pages
+        for item in page.local_checkbox_candidates
+        if item.page == candidate.page
+        and is_visual_checkbox_candidate(page, item)
+        and _bbox_iou(item.control_bbox, candidate.control_bbox) > 0.2
     ]
+    if not matches:
+        return None
+    return max(matches, key=lambda item: _bbox_iou(item.control_bbox, candidate.control_bbox))
 
 
 def _checkboxes(
@@ -1185,29 +1748,87 @@ def _checkboxes(
 ) -> list[CheckboxRecord]:
     records: list[CheckboxRecord] = []
     seen: set[str] = set()
-    for candidate in cloud.checkboxes if cloud else []:
+    candidates = _checkbox_candidates(local, cloud) if cloud else []
+    cloud_ids = {item.id for item in cloud.checkboxes} if cloud else set()
+    for candidate in candidates:
         identifier = candidate.id.strip()
         if not re.fullmatch(r"[A-Za-z0-9._-]{1,80}", identifier) or identifier in seen:
             review.append("A checkbox proposal had a missing or duplicate ID.")
             continue
         seen.add(identifier)
-        block, chunk, _ = _checkbox_label(candidate, pages, blocks, chunks)
-        risks = _checkbox_risks(local, candidate, pages, blocks, chunks, visual_pages)
-        if any(_bbox_iou(candidate.control_bbox, item.control_bbox) > 0.5 for item in records):
-            risks.append("control overlaps another checkbox proposal")
         verification = verifications.get(identifier)
+        # A shape proposal is not a publishable checkbox until the independent
+        # crop review confirms that the pixels depict a checkbox control.
+        if verification is None or verification.control_status != "checkbox":
+            continue
+        local_candidate = _matching_local_checkbox(local, candidate)
+        if local_candidate is not None and not candidate.label.strip():
+            candidate = candidate.model_copy(
+                update={
+                    "label": local_candidate.source_text or "",
+                    "label_bbox": local_candidate.label_bbox,
+                    "label_block_id": local_candidate.label_block_id,
+                    "label_chunk_id": local_candidate.label_chunk_id,
+                    "evidence": [
+                        CloudEvidence(
+                            page=local_candidate.page,
+                            block_id=local_candidate.label_block_id,
+                            chunk_id=local_candidate.label_chunk_id,
+                            quote=local_candidate.source_text or "",
+                        )
+                    ],
+                }
+            )
+        block, chunk, label_risks = _checkbox_label(candidate, pages, blocks, chunks)
+        risks = _checkbox_risks(local, candidate, pages, blocks, chunks, visual_pages)
+        if any(
+            item.page == candidate.page
+            and _bbox_iou(candidate.control_bbox, item.control_bbox) > 0.5
+            for item in records
+        ):
+            risks.append("control overlaps another checkbox proposal")
+        luna_discovered = identifier in cloud_ids
         verification_matches = bool(
             verification
             and verification.page == candidate.page
             and verification.state == candidate.state
             and verification.state in {"CHECKED", "UNCHECKED"}
             and verification.confidence is not None
-            and verification.confidence >= 0.98
+            and verification.confidence >= _MIN_CHECKBOX_VERIFICATION_CONFIDENCE
         )
-        resolvable = risks == ["discovery confidence is below 0.98"]
-        automated = not risks or (resolvable and verification_matches)
+        if local_candidate is None:
+            risks.append("OpenCV did not independently detect this control")
+        else:
+            if local_candidate.state.value != candidate.state:
+                risks.append("OpenCV and main Luna states disagree")
+            label_ids_agree = bool(
+                candidate.label_block_id
+                and candidate.label_block_id == local_candidate.label_block_id
+            ) or bool(
+                candidate.label_chunk_id
+                and candidate.label_chunk_id == local_candidate.label_chunk_id
+            )
+            if not label_ids_agree:
+                risks.append("OpenCV and GPT label grounding disagree")
+        label_score = (
+            block.ocr_score
+            if block is not None
+            else min((score for score in chunk.raw_scores if score is not None), default=None)
+            if chunk is not None
+            else None
+        )
+        if label_risks:
+            risks.append("RapidOCR label grounding is missing or ambiguous")
+        if label_score is None or label_score < 0.85:
+            risks.append("RapidOCR label confidence is below 0.85")
+        if not luna_discovered and not verification_matches:
+            risks.append("Luna did not confirm this control")
         if verification and not verification_matches:
-            risks.append("targeted GPT verification did not agree at confidence 0.98")
+            risks.append(
+                "targeted GPT verification did not agree at confidence "
+                f"{_MIN_CHECKBOX_VERIFICATION_CONFIDENCE:.2f}"
+            )
+        automated = not risks
         reason = None if automated else "; ".join(dict.fromkeys(risks))
         if reason:
             review.append(f"Checkbox {identifier!r} requires review: {reason}.")
@@ -1237,6 +1858,29 @@ def _checkboxes(
                     f"checkboxes/{identifier}.jpg"
                     if _valid_checkbox_bbox(candidate.control_bbox) and candidate.page in pages
                     else None
+                ),
+                local_vision_state=local_candidate.state if local_candidate else None,
+                local_vision_score=(local_candidate.detector_score if local_candidate else None),
+                local_vision_bbox=(local_candidate.control_bbox if local_candidate else None),
+                local_vision_id=local_candidate.id if local_candidate else None,
+                ocr_label_score=local_candidate.ocr_score if local_candidate else None,
+                ocr_grounding_unique=(
+                    local_candidate.ocr_grounding_unique if local_candidate else False
+                ),
+                agreement=(
+                    "consensus"
+                    if automated
+                    else "disagreement"
+                    if local_candidate
+                    and verification
+                    and (
+                        local_candidate.state.value != candidate.state
+                        or verification.state != candidate.state
+                    )
+                    else "incomplete"
+                ),
+                engine_provenance=(
+                    (["OpenCV"] if local_candidate else []) + ["RapidOCR", "gpt-5.6-luna"]
                 ),
             )
         )
@@ -1363,6 +2007,8 @@ def _review_items(messages: list[str]) -> list[ReviewItem]:
             return "extract"
         if "low-confidence block" in lowered:
             return "parse"
+        if "table" in lowered and "requires review" in lowered:
+            return "parse"
         if "page" in lowered:
             return "parse"
         return "validate"
@@ -1371,21 +2017,45 @@ def _review_items(messages: list[str]) -> list[ReviewItem]:
     for index, message in enumerate(messages, 1):
         checkbox_match = re.search(r"Checkbox '([^']+)'", message)
         block_match = re.search(r"low-confidence block ([^:]+):", message)
+        table_match = re.search(r"\bTable\s+(p(\d+)-[^\s]+)\s+requires review", message, re.I)
+        classification_match = re.search(r"Classification '([^']+)'", message)
+        section_match = re.search(r"Section '([^']+)'", message)
+        field_match = re.search(r"(?:Required field|Field) '([^']+)'", message)
         item_stage = stage(message)
+        source_ids = (
+            [checkbox_match.group(1)]
+            if checkbox_match
+            else (
+                [block_match.group(1)]
+                if block_match
+                else (
+                    [table_match.group(1)]
+                    if table_match
+                    else (
+                        [classification_match.group(1)]
+                        if classification_match
+                        else (
+                            [section_match.group(1)]
+                            if section_match
+                            else ([field_match.group(1)] if field_match else [])
+                        )
+                    )
+                )
+            )
+        )
         items.append(
             ReviewItem(
                 id=f"review-{index}",
                 stage=item_stage,
                 code=item_stage.upper() + "_REVIEW",
                 message=message,
-                retryable=not any(
+                retryable=bool(source_ids)
+                and table_match is None
+                and not any(
                     marker in message.lower() for marker in ("failed pages", "low-confidence block")
                 ),
-                source_ids=(
-                    [checkbox_match.group(1)]
-                    if checkbox_match
-                    else ([block_match.group(1)] if block_match else [])
-                ),
+                source_ids=source_ids,
+                pages=[int(table_match.group(2))] if table_match else [],
             )
         )
     return items

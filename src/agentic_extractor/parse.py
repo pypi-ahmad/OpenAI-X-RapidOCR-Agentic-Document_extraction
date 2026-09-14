@@ -1,11 +1,34 @@
-"""Canonical OCR parsing and cost-aware image routing."""
+"""Canonical OCR parsing and cost-aware image routing.
+
+Responsible for: intermediate layout chunking, reading order sorting,
+Markdown synthesis from OCR blocks, low-confidence threshold tracking
+(`LOW_CONFIDENCE_THRESHOLD = 0.85`), and checkbox representation formatting.
+
+Must not: execute external OCR or model calls directly; operates strictly on
+in-memory data models (`PageParse`, `Block`, `ParseChunk`).
+
+Next: `pipeline.py`, which integrates `PageParse` into the full extraction workflow.
+"""
 
 from __future__ import annotations
 
+import html
 from dataclasses import dataclass, field
 from statistics import fmean
 
-from agentic_extractor.models import Block, CheckboxRecord, CheckboxState, ProcessingMode
+from agentic_extractor.models import (
+    Block,
+    CheckboxRecord,
+    CheckboxState,
+    LayoutBlockLink,
+    LayoutRegion,
+    LocalCheckboxCandidate,
+    LocalRedactionCandidate,
+    ProcessingMode,
+    ReadingOrderEvidence,
+    TableStructureEvidence,
+    VisualReviewRegion,
+)
 
 LOW_CONFIDENCE_THRESHOLD = 0.85
 
@@ -31,14 +54,25 @@ class PageParse:
     blocks: list[Block] = field(default_factory=list)
     chunks: list[ParseChunk] = field(default_factory=list)
     image_bytes: bytes = b""
+    layout_image_bytes: bytes = b""
     original_image_bytes: bytes | None = None
     ocr_seconds: float = 0
     engine_elapsed_seconds: float | None = None
     stage_timings: dict[str, float | None] = field(default_factory=dict)
     raw_evidence: dict[str, object] = field(default_factory=dict)
+    layout_raw_evidence: dict[str, object] = field(default_factory=dict)
     layout_signals: dict[str, object] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
     status: str = "completed"
+    ocr_cache_hit: bool = False
+    local_checkbox_candidates: list[LocalCheckboxCandidate] = field(default_factory=list)
+    local_redaction_candidates: list[LocalRedactionCandidate] = field(default_factory=list)
+    visual_review_regions: list[VisualReviewRegion] = field(default_factory=list)
+    layout_regions: list[LayoutRegion] = field(default_factory=list)
+    layout_block_links: list[LayoutBlockLink] = field(default_factory=list)
+    reading_order_evidence: ReadingOrderEvidence | None = None
+    table_structures: list[TableStructureEvidence] = field(default_factory=list)
+    table_raw_evidence: list[dict[str, object]] = field(default_factory=list)
 
     @property
     def markdown(self) -> str:
@@ -98,6 +132,15 @@ def document_markdown(pages: list[PageParse]) -> str:
     return "\n\n".join(f"<!-- page: {p.page} -->\n\n{p.markdown}" for p in pages)
 
 
+def is_publishable_checkbox(checkbox: CheckboxRecord) -> bool:
+    """Return whether a derived checkbox decision is safe as document content."""
+    return (
+        checkbox.decision_status in {"automated", "user_verified"}
+        and checkbox.state is not CheckboxState.NOT_DETERMINABLE
+        and bool(checkbox.label.strip())
+    )
+
+
 def document_markdown_with_checkboxes(
     pages: list[PageParse], checkboxes: list[CheckboxRecord]
 ) -> str:
@@ -111,13 +154,19 @@ def document_markdown_with_checkboxes(
     }
     rendered: list[str] = []
     for page in pages:
+        page_checkboxes = [
+            item for item in checkboxes if item.page == page.page and is_publishable_checkbox(item)
+        ]
+        if not page_checkboxes:
+            rendered.append(f"<!-- page: {page.page} -->\n\n{page.markdown}")
+            continue
         items: list[tuple[float, float, str]] = []
         for chunk in page.chunks or build_layout_chunks(page.blocks):
             box = chunk.bbox or [0, 1, 0, 1]
             items.append((box[1], box[0], chunk.markdown))
-        for checkbox in (item for item in checkboxes if item.page == page.page):
+        for checkbox in page_checkboxes:
             left, top, _, _ = checkbox.control_bbox
-            label = checkbox.label.strip() or checkbox.id
+            label = checkbox.label.strip()
             items.append((top, left, f"- {markers[checkbox.state]} {label}"))
         body = "\n\n".join(value for _, _, value in sorted(items, key=lambda item: item[:2]))
         rendered.append(f"<!-- page: {page.page} -->\n\n{body}")
@@ -229,10 +278,15 @@ def _chunk_markdown(blocks: list[Block], chunk_type: str) -> str:
         )
     if chunk_type == "table":
         rows = [_table_cells(text) for text in texts]
-        header = "| " + " | ".join(rows[0]) + " |"
-        separator = "| " + " | ".join("---" for _ in rows[0]) + " |"
-        body = ["| " + " | ".join(row) + " |" for row in rows[1:]]
-        return "\n".join([header, separator, *body])
+        parts = ["<table><tr>"]
+        parts.extend(f"<th>{html.escape(cell)}</th>" for cell in rows[0])
+        parts.append("</tr>")
+        for row in rows[1:]:
+            parts.append("<tr>")
+            parts.extend(f"<td>{html.escape(cell)}</td>" for cell in row)
+            parts.append("</tr>")
+        parts.append("</table>")
+        return "".join(parts)
     return "\n".join(texts)
 
 

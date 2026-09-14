@@ -1,4 +1,16 @@
-"""Markdown-only document chat models and local retrieval."""
+"""Markdown-only document chat models and local retrieval.
+
+Responsible for: session-only document representation (`ProcessedMarkdownDocument`),
+lexical chunking, document scope filtering (max 12 documents), excerpt retrieval
+scoring, and citation payload generation for document-grounded conversation.
+
+Must not: accept or expose original document binaries, page rasters, raw OCR
+blocks, or unparsed files to the model; must not allow conversational drift
+outside the grounded Markdown excerpts.
+
+Next: `app_pages/chat.py` for the Streamlit UI presentation of chat, and
+`openai_refiner.py` for execution of the chat prompt.
+"""
 
 from __future__ import annotations
 
@@ -55,6 +67,14 @@ class ProcessedMarkdownDocument(BaseModel):
     selected_pages: list[int] = Field(default_factory=list)
     processing_status: str = "Completed"
     failed_pages: list[int] = Field(default_factory=list)
+
+
+def validate_processed_document(value: object) -> ProcessedMarkdownDocument:
+    """Restore a document from reload-safe session data or a stale model instance."""
+    model_dump = getattr(value, "model_dump", None)
+    if callable(model_dump):
+        value = model_dump(mode="json")
+    return ProcessedMarkdownDocument.model_validate(value)
 
 
 class MarkdownExcerpt(BaseModel):

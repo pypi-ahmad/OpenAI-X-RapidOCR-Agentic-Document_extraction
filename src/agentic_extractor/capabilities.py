@@ -1,4 +1,17 @@
-"""Convert and validate cloud output against local document facts."""
+"""Convert and validate cloud output against local document facts.
+
+Responsible for: the untrusted-evidence gate between GPT's classify/section/
+split/extract proposals and the accepted result models. Every accepted item
+must be grounded in an existing page/block, a normalized (0-1) bbox, and (for
+quoted evidence) text that literally appears in the cited block; the model's
+own output is data to be checked here, never an instruction to widen scope
+(e.g. it cannot invent a classification label outside `allowed_classes`).
+Must not: accept ungrounded evidence, partially "fix up" invalid split
+coverage (it is all-or-nothing), or let a JSON-decode failure on a
+structured field raise instead of falling through to normal schema
+validation. Next: workflow.py, which calls this after each cloud Markdown
+response and turns rejections into warnings/review state.
+"""
 
 from __future__ import annotations
 
@@ -29,6 +42,9 @@ def validate_cloud_result(
     warnings: list[str] = []
 
     def evidence(items: list[CloudEvidence]) -> list[EvidenceRef]:
+        # Grounding gate: an item survives only if it points at real local
+        # facts. Anything else is dropped with a warning, never raised or
+        # silently kept — the caller must still function on partial evidence.
         valid: list[EvidenceRef] = []
         for item in items:
             source = "gpt-visual" if item.source == "gpt-visual" else "rapidocr"
@@ -37,11 +53,14 @@ def validate_cloud_result(
                     "Cloud evidence referencing an unknown page or block was discarded."
                 )
                 continue
+            # bbox is normalized to [0, 1] on the page's own width/height, not pixels.
             if item.bbox and (
                 len(item.bbox) != 4 or any(value < 0 or value > 1 for value in item.bbox)
             ):
                 warnings.append("Cloud evidence with an invalid normalized box was discarded.")
                 continue
+            # Anti-hallucination check: a cited quote must be a literal
+            # substring of the block it claims to come from.
             if item.block_id and item.quote and item.quote not in blocks[item.block_id].text:
                 warnings.append("Cloud evidence with a non-matching quote was discarded.")
                 continue
