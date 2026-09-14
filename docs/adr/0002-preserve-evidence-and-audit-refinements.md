@@ -33,4 +33,4 @@ same canonical grounding data.
   text replaced the original evidence.
 
 See the [domain model](../domain-model.md) for the record contracts and the
-[architecture guide](../architecture.md) for the evidence-validation flow.
+[architecture guide](../ARCHITECTURE.md) for the evidence-validation flow.

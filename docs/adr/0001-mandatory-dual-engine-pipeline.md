@@ -39,5 +39,5 @@ sends full relevant OCR evidence for every selected page.
 - UI, API, manifests, and documentation describe RapidOCR and GPT-5.6-luna as the
   mandatory dual engines, with PP-DocLayoutV3 as a required local layout stage.
 
-See [Architecture](../architecture.md) for the runtime flow and
+See [Architecture](../ARCHITECTURE.md) for the runtime flow and
 [Configuration](../CONFIGURATION.md) for actionable engine setup requirements.
