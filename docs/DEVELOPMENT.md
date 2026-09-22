@@ -113,7 +113,7 @@ is the configured Python package build backend.
 - Route both UI and API work through these canonical boundaries. Raw RapidOCR
   evidence is immutable; corrections belong in the auditable refinement layer.
 - Keep document-chat contracts and local Markdown retrieval in
-  `src/agentic_extractor/document_chat.py`, the Luna request boundary in
+  `src/agentic_extractor/document_chat.py`, the Sol request boundary in
   `OpenAIRefiner.answer_document_question`, and page rendering in
   `app_pages/chat.py`. Chat sources must contain generated Parse Markdown and
   display metadata only, never original bytes, page images, OCR objects, or
@@ -139,7 +139,7 @@ dictionary produced from `ProcessedMarkdownDocument`; each entry contains its
 document ID, display name, generated Markdown, selected-page metadata, status,
 and failed-page numbers. `current_processed_document_id`
 keeps reruns of the same upload attached to one entry. `usage_history` is shared
-by Parse and document chat so both kinds of Luna calls appear in the existing
+by Parse and document chat so both kinds of Sol calls appear in the existing
 usage panel. The application reset action clears the entire Streamlit session.
 
 Document chat is intentionally session-only. It permits up to 12 processed
@@ -147,7 +147,7 @@ documents, defaults to the newest entry, and saves and restores `chat_messages`
 for each `chat_scope`; a previously unseen scope starts empty. Local retrieval
 splits Markdown by page markers and
 headings, limits excerpts and context characters, and sends only those excerpts
-plus the six most recent visible messages to Luna. An answer is rendered only
+plus the six most recent visible messages to Sol. An answer is rendered only
 when its citation IDs match supplied excerpts; unknown or missing citations fail
 closed as insufficient evidence. The retrieval limits are deterministic character
 budgets, not token estimates; provider-reported token usage remains the source for
@@ -220,5 +220,5 @@ For locally prepared changes:
 
 See [Contributing](../CONTRIBUTING.md) for contribution guidelines,
 [Testing](TESTING.md) for focused test commands and coverage behavior, and
-[Context engineering](CONTEXT-ENGINEERING.md) before changing Luna payloads or
+[Context engineering](CONTEXT-ENGINEERING.md) before changing Sol payloads or
 prompt order.

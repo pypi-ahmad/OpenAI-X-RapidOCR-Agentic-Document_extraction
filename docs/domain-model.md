@@ -47,18 +47,40 @@ retains its pixel dimensions, source image, blocks, chunks, OCR timing, raw
 engine output, derived layout signals, warnings, and status. A block has a
 stable ID, page, text, type, optional raw RapidOCR score, optional source-pixel
 polygon, and optional normalized `xyxy` bounding box. A `ParseChunk` groups
-ordered source block IDs and carries their union bounding box and raw scores.
+ordered source block IDs and carries their union bounding box and raw scores. Derived visual
+chunks may have no OCR source blocks; they carry their own page-relative box,
+`provenance="gpt-visual"`, and verification status. `PageParse.visual_audits` stores
+their decision history, while optional `inspection_image_bytes` holds a higher-resolution raster.
 
 Confidence is engine-specific raw evidence. It is nullable and is not treated
 as calibrated across engines.
 
-### Evidence reference
+### Visual objects and document links
+
+`VisualObject` in `rich_document.py` represents missed text, a figure/chart description,
+or an equation. It has an application-assigned stable ID, page, positive-area normalized box,
+content, reading order, and optional source block IDs. `CloudResult.visual_objects` retains
+proposals separately from immutable RapidOCR evidence. Matching audit records are bound to
+the complete proposal hash, so approval cannot be reused for changed content.
+
+Pending objects publish `[VISUAL_CONTENT_REQUIRES_REVIEW]`, not proposed values.
+`model_verified` requires a supported crop decision with matching transcription after
+stripping surrounding whitespace. A human approve/correct decision produces
+`human_approved`; rejection removes the object from canonical Markdown. Invalid source
+references still require review. Human actions require a reason and preserve prior audits.
+Descriptions remain explicitly labelled and cannot support exact-value extraction as chunk evidence.
+
+`DocumentLink` references source and target chunk IDs with `continues`, `caption_of`, or
+`parent_of`. Validation checks endpoints, duplicate edges and directed cycles; continuation
+also requires forward page/reading order. Links remain model proposals and do not merge pages.
+
+### Grounding references
 
 An evidence reference links a proposal to a source page and may include one or
 more of:
 
 - an existing RapidOCR block, optionally with a quote contained in that block;
-- an existing Parse chunk whose source blocks remain traceable; or
+- an existing grounded Parse chunk, including verified visual text/equations; or
 - a normalized visual bounding box on a page image actually sent to GPT.
 
 Evidence cannot grant new permissions, change routing, or modify the requested
@@ -133,6 +155,10 @@ cache-write-input, and output token counts are reported. Missing cached-input
 or cache-write-input usage produces an estimate; missing or invalid
 input/output usage makes cost unavailable. Other optional token components may
 remain `None` without changing that status, and usage is never fabricated.
+
+The OpenAI boundary captures available usage before structured parsing can fail. Its
+attempt ledger is thread-local; failed attempts are included in API job usage and UI
+processing history. These records do not fabricate missing provider billing information.
 
 ## Schema inputs
 

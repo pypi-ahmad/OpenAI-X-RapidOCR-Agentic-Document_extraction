@@ -1,6 +1,6 @@
 # Contributing
 
-This guide documents the development standards, testing expectations, and contribution process for Agentic document extractor.
+This guide covers development standards, testing expectations, and contributions to Agentic document extractor.
 
 ## Development setup
 
@@ -56,7 +56,7 @@ Run the formatting, linting, typing, and test checks locally:
 
 Contributions follow these architecture rules:
 
-1. Three-engine pipeline: Every successful extraction must execute RapidOCR first, PP-DocLayoutV3 second, and OpenAI `gpt-5.6-luna` third. Do not add single-engine fallback paths or bypass any of the three engines.
+1. Three-engine pipeline: Every successful extraction must execute RapidOCR first, PP-DocLayoutV3 second, and OpenAI `gpt-6-sol` third. Do not add single-engine fallback paths or bypass any of the three engines.
 2. Immutable OCR evidence: Raw `Block` objects produced by RapidOCR must remain immutable. Model proposals and corrections must be recorded as additive refinement layers.
 3. Downstream workflows: The Classify, Section, Split, and Extract workflows must consume the canonical refined Markdown and grounding index rather than re-running OCR.
 4. Prompt resource management: Model prompt templates must be placed as versioned Markdown files in `src/agentic_extractor/prompts/` rather than hardcoded in Python code. Updates to prompt templates require incrementing the `prompt-version` metadata and updating expectations in `tests/test_prompt_resources.py`.
@@ -65,7 +65,7 @@ Contributions follow these architecture rules:
 
 ## Branch and testing expectations
 
-The repository has no remote CI pipelines (such as GitHub Actions) or issue templates. Validation runs locally.
+The repository has no remote CI pipelines, such as GitHub Actions, or issue templates. Run validation locally.
 
 Before submitting changes, make sure these commands pass:
 

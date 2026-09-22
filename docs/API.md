@@ -55,7 +55,7 @@ sequenceDiagram
 
 The sequence shows that schema extraction reuses the canonical Parse result and
 does not rerun RapidOCR. Classify, Section, Split, and Extract operate on the
-GPT-refined Markdown and its grounding index. Their Luna requests are text-only:
+GPT-refined Markdown and its grounding index. Their Sol requests are text-only:
 the API does not resend the original upload or page images for these downstream
 workflows.
 
@@ -145,7 +145,7 @@ HTTP `200` returns a `JobStatus` object:
     "markdown": "Invoice 42\n\n<!-- document_id: local-... -->",
     "metadata": {
       "job_id": "local-...",
-      "model_version": "rapidocr-gpt-5.6-luna-pp-doclayout-v3",
+      "model_version": "rapidocr-gpt-6-sol-pp-doclayout-v3",
       "page_count": 1,
       "output_markdown_chars": 49,
       "range_units": "unicode_codepoints",
@@ -154,7 +154,10 @@ HTTP `200` returns a `JobStatus` object:
       "duration_ms": 1250,
       "billing": {"service_tier": "local", "total_credits": null}
     },
-    "structure": {"type": "document", "children": []}
+    "structure": {"type": "document", "children": []},
+    "visual_objects": [],
+    "visual_audits": [],
+    "document_links": []
   },
   "artifacts": {
     "document.md": "/api/v1/jobs/<opaque-job-id>/artifacts/document.md"
@@ -163,12 +166,31 @@ HTTP `200` returns a `JobStatus` object:
 }
 ```
 
-The `result` object is the LandingAI-shaped public Parse projection with exactly
-`markdown`, `metadata`, and `structure`. Its Unicode ranges address the emitted
+The `result` object is the LandingAI-shaped public Parse projection with
+`markdown`, `metadata`, `structure`, `visual_objects`, `visual_audits`, and
+`document_links`. Its Unicode ranges address the emitted
 Markdown. The `manifest.json` retains per-page block counts plus derived layout,
 refinement, checkbox, timing, warning, and usage evidence; it does not serialize raw
 page blocks or chunks. Raw `content_base64` is never returned. For the evidence model,
 see the [Domain model](domain-model.md).
+
+`JobStatus` also returns a top-level `usage` record (omitted from the abbreviated example).
+It aggregates completed-result usage and recorded failed attempts for that job. Reported
+token counts and calculated costs can therefore remain available when `state` is `FAILED`.
+Missing counts remain null; `cost_status` is `exact`, `estimate`, or `unavailable`.
+
+The additive visual fields contain:
+
+| Field | Contract |
+| --- | --- |
+| `visual_objects` | Original proposals: `id`, one-based `page`, `kind` (`text`, `figure`, `chart`, `equation`), normalized positive-area `bbox`, `content`, `reading_order`, and optional source block IDs. Proposal presence does not mean acceptance. |
+| `visual_audits` | Crop-verification and human-review records bound to the proposal `id` and `digest`. Status is `pending`, `model_verified`, `human_approved`, or `rejected`; human decisions also record action, reason, actor, and timestamp. No matching audit means pending. |
+| `document_links` | Model-proposed `source_id`, `target_id`, and `relation` (`continues`, `caption_of`, `parent_of`). Invalid relationships trigger review but remain in this proposal list; structural validation is not semantic proof. |
+
+Rendered visual nodes include `source_id`, `provenance="gpt-visual"`, and `verification`
+alongside normal grounding. Pending content renders a review placeholder; rejected content
+is omitted from canonical Markdown. Figure/chart descriptions are labelled as descriptions.
+Human visual decisions are currently a Streamlit feature; no visual-review HTTP endpoint exists.
 
 `result.metadata.duration_ms` is the compact public duration. The ZIP bundle's
 `manifest.json` provides the detailed `timings` map and a `timing_analysis`
@@ -256,7 +278,7 @@ High Accuracy block-review records are not separate fields in this response.
 Their unresolved messages appear in `review_required` and corresponding
 structured `review_items`; retrieve the records themselves from `manifest.json`.
 
-`checkboxes` contains OpenCV pixel proposals, RapidOCR label grounding, Luna page discovery and
+`checkboxes` contains OpenCV pixel proposals, RapidOCR label grounding, Sol page discovery and
 independent crop verification, consensus status, confidence, decision status, and review reason.
 `checkbox_corrections` contains auditable local user decisions. Checkbox automation is
 best-effort; unresolved controls remain `REVIEW_REQUIRED`.

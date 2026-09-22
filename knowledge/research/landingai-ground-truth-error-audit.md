@@ -151,7 +151,7 @@ LandingAI's current documentation describes Parse as structured Markdown, chunks
 
 On page 2, the marker totals alone understate errors. Ours marks Planned inpatient, Diagnostic study, and Home as checked, duplicates options, publishes raw label `p2-cv20`, and misses the oracle's exact table association for the servicing-provider `X`.
 
-Critically, `$.checkboxes[21]` is the only record marked `automated`; it claims a checked **Home** control with three-engine consensus. The oracle says Home is unchecked (`LandingAI ...parse.md:129`). This is a false consensus, not merely an unreviewed candidate.
+`$.checkboxes[21]` is the only record marked `automated`; it claims a checked **Home** control with three-engine consensus. The oracle says Home is unchecked (`LandingAI ...parse.md:129`). This is a false consensus, not merely an unreviewed candidate.
 
 ### Completion and telemetry
 

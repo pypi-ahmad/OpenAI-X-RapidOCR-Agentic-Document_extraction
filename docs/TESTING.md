@@ -21,7 +21,7 @@ With `RUN_LIVE_PROMPT_EVAL` unset, the paid prompt-quality module is skipped.
 Keep this variable unset for normal local and full-suite runs.
 
 Prompt-quality smoke benchmarks are explicitly opt-in because they make paid,
-non-deterministic requests to `gpt-5.6-luna`. To authorize them with valid
+non-deterministic requests to `gpt-6-sol`. To authorize them with valid
 OpenAI configuration:
 
 ```powershell
@@ -32,6 +32,35 @@ uv run pytest -o addopts="" tests/test_prompt_quality_live.py -m live -s
 These curated cases check grounded extraction, unsupported-field abstention,
 checkbox coverage, and checkbox states. They are regression signals, not a
 claim of accuracy on unseen documents.
+
+Those legacy live tests do not attach a dollar budget. For an explicitly authorized,
+budgeted synthetic run, use:
+
+```powershell
+uv run python tools/validate_sol_synthetic.py validation-output/sol-synthetic-run --authorize-up-to-usd 5
+```
+
+The runner generates a two-page synthetic scanned PDF and uses real RapidOCR,
+PP-DocLayoutV3, and GPT-6 Sol. It checks six expected text values and failed pages;
+its exit code is not a comprehensive layout or semantic-accuracy score. Inspect
+`summary.json`, including workflow state and unresolved review items, as well as the artifacts.
+The output directory must not already exist. `billing.json` records reservations before
+generation and settlement afterward; `summary.json` includes usage and reservations.
+
+The limit is per runner instance, not a durable account-wide cap. The runner does not reload
+old reservations after restart. Keep earlier spend within the same authorization when deciding
+whether to run again, and do not restart with a fresh budget after an unknown-billing request.
+The normal UI/API and `RUN_LIVE_PROMPT_EVAL` tests do not inherit this $5 limit.
+
+Focused offline checks for the upgrade:
+
+```powershell
+uv run pytest -o addopts="" tests/test_rich_document.py tests/test_openai_refiner.py tests/test_workflow.py tests/test_local_artifacts.py tests/test_ui_state.py
+```
+
+These cover pending-content abstention, crop decisions, immutable raw OCR, reading-order
+insertion, two-round/no-progress limits, Unicode export ranges, UI decisions without paid
+calls, response-failure accounting, bounded PDF inspection, and persisted budget reservations.
 
 ## Running tests
 
@@ -76,8 +105,8 @@ uv run pytest -o addopts="" `
   tests/test_openai_refiner.py tests/test_costs.py
 ```
 
-This set verifies the RapidOCR-first/Luna-second contract, with local layout and
-table analysis between those engines. It also covers the fixed `gpt-5.6-luna`
+This set verifies the RapidOCR-first/Sol-second contract, with local layout and
+table analysis between those engines. It also covers the fixed `gpt-6-sol`
 model and `medium` reasoning effort, mode-specific context, missing-engine
 failures, reported-token accounting, cached-input and cache-write pricing, and
 the long-context pricing multiplier.
@@ -92,7 +121,7 @@ uv run pytest -o addopts="" `
 ```
 
 These tests cover CPU/CUDA selection, bounded OCR workers, layout and table
-normalization, immutable RapidOCR grounding, local visual candidates, Luna
+normalization, immutable RapidOCR grounding, local visual candidates, Sol
 adjudication boundaries, and safe publication into canonical Markdown.
 
 Run focused application-boundary checks:
@@ -111,12 +140,12 @@ uv run pytest -o addopts="" `
   tests/test_document_chat.py tests/test_navigation.py tests/test_prompt_resources.py
 ```
 
-These tests prove that chat receives generated Markdown rather than original
+These tests verify that chat receives generated Markdown rather than original
 files, retrieves bounded document-scoped excerpts, limits recent conversation
 history, refuses unknown citations, fails closed for off-topic or insufficient
 evidence responses, serializes untrusted prompt-injection text as data, and
 clears chat history when the selected document scope changes. Prompt-resource
-tests also verify that reusable Luna instructions are packaged as versioned
+tests also verify that reusable Sol instructions are packaged as versioned
 Markdown files.
 
 Run agentic workflow validation independently:
@@ -216,7 +245,7 @@ boundaries. Existing examples include:
 - `tests/test_evaluation_data.py`, which validates the review-pack schema and
   refuses to treat draft or partially reviewed annotations as human gold data.
 - `tests/test_document_chat.py`, which verifies Markdown-only retrieval,
-  document scope, bounded history, Luna request construction, citation
+  document scope, bounded history, Sol request construction, citation
   validation, fail-closed rendering, and prompt-injection resistance.
 - `tests/test_navigation.py`, which verifies the separate workflow pages and
   document-chat selection behavior through Streamlit `AppTest`.

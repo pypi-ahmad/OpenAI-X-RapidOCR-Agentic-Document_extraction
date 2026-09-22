@@ -61,7 +61,7 @@ Both services require `OPENAI_API_KEY` to be set in the process environment befo
 | Symptom / error string | Root cause | Remediation |
 |---|---|---|
 | `OpenAI is not configured. Add OPENAI_API_KEY to the launcher environment...` | `OPENAI_API_KEY` environment variable is missing, empty, or unreadable in the launching process. | Set `$env:OPENAI_API_KEY = "your-key"` in the terminal and restart the service. |
-| `OpenAIConfigurationError: ...` | API key is invalid or lacks access permissions for model `gpt-5.6-luna`. | Verify key validity and confirm the OpenAI account has active access to `gpt-5.6-luna`. |
+| `OpenAIConfigurationError: ...` | API key is invalid or lacks access permissions for model `gpt-6-sol`. | Verify key validity and confirm the OpenAI account has active access to `gpt-6-sol`. |
 | `PP-DocLayoutV3 is unavailable. Run 'uv sync --project tools/pp_doclayout --locked' and retry.` | The isolated layout worker virtual environment at `tools/pp_doclayout/.venv` is missing or incomplete. | Run `uv sync --project tools/pp_doclayout --locked` from the repository root. |
 | `The installed worker returned an incompatible V3 result contract` (`LayoutContractError`) | The worker process crashed, timed out, or returned malformed JSON over the subprocess pipe. | Inspect terminal logs for PaddleX traceback; confirm NVIDIA CUDA 12 drivers or CPU libraries are functioning properly. |
 | `RapidOCR is unavailable. Run 'uv sync --all-groups', then verify RapidOCR and ONNX Runtime.` | RapidOCR or ONNX Runtime failed during module initialization. | Run `uv sync --all-groups` to refresh installed wheels and check ONNX Runtime DLL dependencies. |

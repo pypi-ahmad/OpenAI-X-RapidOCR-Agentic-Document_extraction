@@ -9,8 +9,8 @@ evidence. Accuracy and auditability take priority over token reduction.
 ## Runtime context contract
 
 RapidOCR remains the source of local text, geometry, confidence, and initial layout. Each Parse
-request sends a low-detail overview of every selected page to GPT-5.6-luna unless a page-wide
-high-detail region replaces that overview. Other locally planned uncertainty regions are attached
+request sends a high-detail overview of every selected page to gpt-6-sol. Locally planned
+uncertainty regions are attached
 at high detail. Balanced uses compact OCR rows by default and full rows for routed uncertainty or
 complexity; High Accuracy uses full rows for every selected page.
 
@@ -22,8 +22,18 @@ later bounded calls may select fewer blocks or truncate copied text without chan
 
 Optional Classify, Section, Split, and Extract calls receive the canonical refined Markdown plus a
 lossless grounding table containing page, block ID, chunk ID, type, confidence, bounding box, and
-raw source text. This deliberate duplication lets GPT cite exact raw evidence after Markdown
+raw source text. This duplication lets GPT cite exact raw evidence after Markdown
 structure has been refined.
+
+Accepted visual chunks add grounding rows with no raw block ID, their own chunk ID, kind,
+box, and rendered content. Their confidence is null rather than an invented OCR score.
+Figure/chart descriptions and pending review placeholders must not be treated as exact
+source values. On fresh workflow runs, visual inspection precedes requested downstream work.
+
+Visual-object verification uses a separate versioned `visual-object-verification.md` prompt
+and at most eight high-detail crops per round. PDF crops can use a bounded inspection raster
+up to 300 DPI; the original OCR image and evidence remain unchanged. Crop verification is
+model review, not human approval. See [Visual review](SOL-UPGRADE.md) for audit semantics.
 
 ## Prompt order and batching
 
@@ -55,7 +65,7 @@ Every usage call may include a `context` object:
 | `full_context_pages` | Pages represented with full OCR/layout rows |
 | `batch_kind` | `compact` for a packed compact-evidence request or `full` for an isolated full-review page |
 | `batch_index` / `batch_count` | One-based request position and total primary refinement requests |
-| `overview_pages` | Pages supplied as low-detail visual overviews |
+| `overview_pages` | Pages supplied as high-detail visual overviews |
 | `high_resolution_regions` | Grounded high-detail crops, reasons, bounds, and source IDs |
 | `high_resolution_region_count` | Number of high-detail crops in the call |
 
