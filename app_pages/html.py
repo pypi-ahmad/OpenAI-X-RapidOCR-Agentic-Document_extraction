@@ -15,7 +15,7 @@ import streamlit as st
 from agentic_extractor.ui_state import output_file_name
 
 st.title(":material/web: HTML")
-st.caption("Source page rasters with selectable RapidOCR and accepted Luna text coordinates.")
+st.caption("Source page rasters with selectable RapidOCR and accepted Sol text coordinates.")
 
 artifacts = st.session_state.get("artifacts")
 result = st.session_state.get("result")

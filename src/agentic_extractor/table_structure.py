@@ -213,7 +213,7 @@ def enrich_page_tables(page: PageParse, tables: list[TableStructureEvidence]) ->
 def apply_table_reviews(
     pages: list[PageParse], reviews: list[Any]
 ) -> tuple[list[dict[str, Any]], list[str]]:
-    """Apply only grounded Luna table decisions to derived table evidence."""
+    """Apply only grounded Sol table decisions to derived table evidence."""
     blocks = {block.id: block for page in pages for block in page.blocks}
     words = {
         item["id"]: item
@@ -232,9 +232,9 @@ def apply_table_reviews(
     for table_id, table in by_id.items():
         review = reviews_by_id.get(table_id)
         status = "unresolved"
-        reason = "Luna did not return a table review."
+        reason = "Sol did not return a table review."
         if table_id in duplicate_ids:
-            reason = "Luna returned duplicate reviews for this table."
+            reason = "Sol returned duplicate reviews for this table."
         elif review is not None and review.page == table.page:
             visible_cell_count = getattr(review, "visible_cell_count", None)
             if (
@@ -253,7 +253,7 @@ def apply_table_reviews(
                 table.status = "invalid"
                 table.review_required = False
                 status = "rejected"
-                reason = review.warning or "Luna rejected this layout false positive as non-table."
+                reason = review.warning or "Sol rejected this layout false positive as non-table."
             elif review.outcome == "corrected" and _matches_applied_correction(table, review):
                 status = "accepted"
                 reason = None
@@ -437,17 +437,17 @@ def apply_table_reviews(
                     status = "accepted"
                     reason = None
                 else:
-                    reason = "Luna table correction lacked valid RapidOCR grounding."
+                    reason = "Sol table correction lacked valid RapidOCR grounding."
             elif review.outcome == "abstained":
-                reason = review.warning or "Luna abstained from table review."
+                reason = review.warning or "Sol abstained from table review."
             elif review.outcome == "confirmed" and review.cells:
-                reason = "Luna confirmed outcome also supplied replacement cells."
+                reason = "Sol confirmed outcome also supplied replacement cells."
             elif review.outcome == "confirmed":
-                reason = "Luna visible cell count did not match the confirmed local grid."
+                reason = "Sol visible cell count did not match the confirmed local grid."
             elif review.outcome == "not_table":
-                reason = "Luna non-table outcome supplied an inconsistent cell count or grid."
+                reason = "Sol non-table outcome supplied an inconsistent cell count or grid."
             else:
-                reason = "Luna confirmed a locally invalid table structure."
+                reason = "Sol confirmed a locally invalid table structure."
         if status == "unresolved":
             table.review_required = True
             warnings.append(f"Table {table_id} requires review: {reason}")

@@ -160,7 +160,7 @@ def test_document_chat_request_is_text_only_fixed_model_and_grounded() -> None:
     )
 
     assert answer.answer_markdown == "The total is $42."
-    assert responses.kwargs["model"] == "gpt-5.6-luna"
+    assert responses.kwargs["model"] == "gpt-6-sol"
     assert responses.kwargs["reasoning"] == {"effort": "medium"}
     assert responses.kwargs["store"] is False
     assert responses.kwargs["tools"] == []

@@ -83,6 +83,42 @@ def parse_result() -> LocalParseResult:
     )
 
 
+def test_visual_review_survives_all_exports_without_mutating_raw_evidence() -> None:
+    from agentic_extractor.openai_refiner import CloudResult
+    from agentic_extractor.rich_document import VisualObject, record_visual_review
+
+    result = parse_result()
+    item = VisualObject(
+        id="visual-p2-test",
+        page=2,
+        kind="text",
+        content="Recovered Ω 42",
+        reading_order=2,
+        bbox=[0.1, 0.5, 0.8, 0.8],
+    )
+    result.cloud_output = CloudResult(
+        refined_markdown="", reviewed_pages=[2], visual_objects=[item]
+    ).model_dump(mode="json")
+    result.pages[0].visual_audits = record_visual_review(item, [], "approve", "Source crop read")
+    result.markdown = render_result_markdown(result)
+    artifacts = build_local_artifacts(result)
+    parsed = json.loads(artifacts.parse_result)
+    node = next(
+        node
+        for node in parsed["structure"]["children"][0]["children"]
+        if node.get("source_id") == item.id
+    )
+    start, end = node["grounding"]["range"]["start"], node["grounding"]["range"]["end"]
+    assert parsed["markdown"][start:end] == item.content
+    assert node["verification"] == "human_approved"
+    assert item.content in artifacts.markdown.decode()
+    assert item.content in artifacts.html.decode()
+    assert artifacts.annotated_pdf.startswith(b"%PDF")
+    assert parsed["visual_audits"][0]["reason"] == "Source crop read"
+    assert result.pages[0].raw_evidence["texts"] == ["Total: 42"]
+    assert len(result.pages[0].blocks) == 1
+
+
 def _jpeg(image: Image.Image) -> bytes:
     output = io.BytesIO()
     image.save(output, "JPEG")
@@ -115,7 +151,14 @@ def test_artifacts_are_real_and_grounded() -> None:
     assert "Grounding inspector" in html
     assert artifacts.markdown.startswith(b"Total: 42")
     parsed = json.loads(artifacts.parse_result)
-    assert set(parsed) == {"markdown", "metadata", "structure"}
+    assert set(parsed) == {
+        "markdown",
+        "metadata",
+        "structure",
+        "visual_objects",
+        "visual_audits",
+        "document_links",
+    }
     assert artifacts.manifest["manifest_version"] == 7
     assert parsed["metadata"]["range_units"] == "unicode_codepoints"
     assert "gpt_attempts" in artifacts.manifest
@@ -242,7 +285,7 @@ def test_manifest_reports_gpt_only_after_a_real_cloud_call() -> None:
     ]
     artifacts = build_local_artifacts(result)
 
-    assert artifacts.manifest["processing"]["gpt_model"] == "gpt-5.6-luna"
+    assert artifacts.manifest["processing"]["gpt_model"] == "gpt-6-sol"
     assert artifacts.manifest["processing"]["reasoning_effort"] == "medium"
     assert artifacts.manifest["usage_and_cost"]["gpt"]["call_count"] == 1
     assert (
@@ -483,7 +526,7 @@ def test_html_uses_detected_reading_order_and_auditable_geometry() -> None:
     refined_b2 = html.index('data-layer="refined" data-source-id="p2-b2"')
     refined_b1 = html.index('data-layer="refined" data-source-id="p2-b1"')
     assert refined_b2 < refined_b1
-    assert 'data-provenance="gpt-5.6-luna + rapidocr"' in html
+    assert 'data-provenance="gpt-6-sol + rapidocr"' in html
     assert 'data-layout-region-id="p2-l1"' in html
     assert 'data-table-cell-id="p2-t1-r1-c1"' in html
     assert 'data-checkbox-id="p2-check1"' in html

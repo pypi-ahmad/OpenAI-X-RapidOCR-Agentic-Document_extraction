@@ -82,7 +82,7 @@ def test_pipeline_rejects_ungrounded_free_form_markdown(monkeypatch) -> None:
 def test_pipeline_fails_when_gpt_refinement_fails(monkeypatch) -> None:
     setup_pipeline(monkeypatch)
     resource = OCRResource(SimpleNamespace(), "CPU", "fallback")
-    with pytest.raises(GPTRefinementError, match="GPT-5.6-luna refinement failed"):
+    with pytest.raises(GPTRefinementError, match="gpt-6-sol refinement failed"):
         process_document(
             DocumentRequest(file_name="x.png", file_bytes=b"png"),
             ocr_resource=resource,

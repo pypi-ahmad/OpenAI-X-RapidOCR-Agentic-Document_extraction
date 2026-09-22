@@ -3,7 +3,7 @@
 Responsible for: orchestrating the canonical hybrid extraction pipeline
 (`process_document` and `process_hybrid_document`) across ingestion,
 RapidOCR, PP-DocLayoutV3, table structure analysis, visual crop routing,
-and OpenAI `gpt-5.6-luna` refinement.
+and OpenAI `gpt-6-sol` refinement.
 
 Must not: bypass any of the three required engines, mutate raw OCR blocks
 (immutable evidence boundary), or allow single-engine fallback.
@@ -204,7 +204,11 @@ def process_hybrid_document(
 
 
 def refine_local_parse(
-    local: LocalParseResult, request: DocumentRequest, refiner: Refiner | None = None
+    local: LocalParseResult,
+    request: DocumentRequest,
+    refiner: Refiner | None = None,
+    *,
+    defer_markdown_workflows: bool = False,
 ) -> LocalParseResult:
     """Route and merge only evidence-linked GPT refinements into a local Parse result."""
     routing_started = time.perf_counter()
@@ -215,7 +219,7 @@ def refine_local_parse(
         for page in local.pages
     }
     local.cloud_pages = [page.page for page in local.pages]
-    # Every page receives visual review; only locally planned uncertainty uses high detail.
+    # Every selected page receives a high-detail image in both modes.
     local.cloud_image_pages = [page.page for page in local.pages]
     record_stage_timing(local.timings, "routing_seconds", time.perf_counter() - routing_started)
     _detect_local_checkboxes(local)
@@ -249,7 +253,7 @@ def refine_local_parse(
         )
     except Exception as exc:
         raise GPTRefinementError(
-            f"GPT-5.6-luna refinement failed; no extraction was completed: {exc}"
+            f"gpt-6-sol refinement failed; no extraction was completed: {exc}"
         ) from exc
     record_stage_timing(
         local.timings, "gpt_refinement_seconds", time.perf_counter() - refinement_started
@@ -257,7 +261,7 @@ def refine_local_parse(
     local.usage = aggregate_usage([local.usage, usage]) if local.usage.call_count else usage
     if usage.call_count < 1:
         raise GPTRefinementError(
-            "GPT-5.6-luna returned no API call record; no extraction was completed."
+            "gpt-6-sol returned no API call record; no extraction was completed."
         )
     local.cloud_attempts.append(
         {
@@ -280,7 +284,7 @@ def refine_local_parse(
     local.document_metadata["table_reviews"] = table_reviews
     local.warnings.extend(refinement_warnings)
     _record_low_confidence_reviews(local, request)
-    if requested_capabilities - {"Parse"}:
+    if requested_capabilities - {"Parse"} and not defer_markdown_workflows:
         local, cloud = refine_markdown_workflows(local, request, cloud_refiner, cloud)
     local.cloud_output = cloud.model_dump(mode="json")
     local.document_metadata["gpt_rate_assumptions"] = rate_assumptions()
@@ -358,7 +362,7 @@ def _detect_local_redactions(local: LocalParseResult) -> None:
         "confidence_calibrated": False,
         "candidate_count": sum(len(page.local_redaction_candidates) for page in local.pages),
         "failed_pages": failed_pages,
-        "publication_rule": "local mask candidate plus Luna visual confirmation",
+        "publication_rule": "local mask candidate plus Sol visual confirmation",
     }
 
 
@@ -470,7 +474,7 @@ def refine_markdown_workflows(
         )
     except Exception as exc:
         raise GPTRefinementError(
-            f"GPT-5.6-luna Markdown workflow failed; no workflow result was completed: {exc}"
+            f"gpt-6-sol Markdown workflow failed; no workflow result was completed: {exc}"
         ) from exc
     record_stage_timing(
         local.timings, "markdown_workflow_seconds", time.perf_counter() - workflow_started
@@ -660,7 +664,7 @@ def _apply_refinements(
             )
     for candidate_id in sorted(set(redactions) - reviewed_redactions):
         warnings.append(
-            f"Local redaction candidate {candidate_id} received no Luna outcome; "
+            f"Local redaction candidate {candidate_id} received no Sol outcome; "
             "the placeholder was not published."
         )
     for page in refined_pages:
@@ -678,6 +682,18 @@ def _apply_refinements(
     table_audits, table_warnings = apply_table_reviews(refined_pages, cloud.table_reviews)
     warnings.extend(table_warnings)
     _apply_semantic_regions(refined_pages, cloud.semantic_regions, warnings)
+    from agentic_extractor.rich_document import apply_visual_objects, validate_links
+
+    audits = [audit for page in raw_pages for audit in page.visual_audits]
+    warnings.extend(
+        apply_visual_objects(
+            refined_pages,
+            cloud.visual_objects,
+            audits,
+            {(region.page, region.id): region.reading_order for region in cloud.semantic_regions},
+        )
+    )
+    warnings.extend(validate_links(refined_pages, cloud.document_links))
     refined_by_page = {page.page: page for page in refined_pages}
     for raw_page in raw_pages:
         refined_page = refined_by_page[raw_page.page]
@@ -873,7 +889,7 @@ def _validated_semantic_type(
             and max(evidence.bbox[3] - evidence.bbox[1] for evidence in visual_evidence) < 0.04
         ):
             # A small, single OCR word without independent image-layout support
-            # is ordinary running-header text, even if Luna recognizes the brand.
+            # is ordinary running-header text, even if Sol recognizes the brand.
             return "text"
     if proposal.type == "attestation":
         text = "\n".join(block.text for block in source_blocks)
@@ -1195,7 +1211,7 @@ def process_document(
         "ocr_device": resource.device,
         "ocr_seconds": sum(page.ocr_seconds for page in parsed),
         "rapidocr_version": _version("rapidocr"),
-        "openai_model": "gpt-5.6-luna",
+        "openai_model": "gpt-6-sol",
         "reasoning_effort": "medium",
         "balanced_thresholds_calibrated": False,
     }
@@ -1208,7 +1224,7 @@ def process_document(
             request.extraction_schema,
         )
         if usage.call_count < 1:
-            raise RuntimeError("GPT-5.6-luna returned no API call record.")
+            raise RuntimeError("gpt-6-sol returned no API call record.")
         refined_markdown, refinements, refinement_warnings, _ = _apply_refinements(
             parsed, cloud, {page.page for page in parsed}
         )
@@ -1231,7 +1247,7 @@ def process_document(
         )
     except Exception as exc:
         raise GPTRefinementError(
-            f"GPT-5.6-luna refinement failed; no extraction was completed: {exc}"
+            f"gpt-6-sol refinement failed; no extraction was completed: {exc}"
         ) from exc
 
 

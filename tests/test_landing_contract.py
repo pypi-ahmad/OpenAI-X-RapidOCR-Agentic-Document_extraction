@@ -70,7 +70,14 @@ def _result() -> LocalParseResult:
 def test_landing_parse_shape_and_unicode_ranges_reference_emitted_markdown() -> None:
     parsed = build_landing_parse(_result())
 
-    assert set(parsed) == {"markdown", "metadata", "structure"}
+    assert set(parsed) == {
+        "markdown",
+        "metadata",
+        "structure",
+        "visual_objects",
+        "visual_audits",
+        "document_links",
+    }
     assert parsed["metadata"]["range_units"] == "unicode_codepoints"
     assert parsed["metadata"]["billing"] == {"service_tier": "local", "total_credits": None}
     assert parsed["structure"]["type"] == "document"

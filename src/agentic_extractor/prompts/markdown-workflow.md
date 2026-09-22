@@ -1,9 +1,12 @@
-<!-- prompt-version: 2 -->
+<!-- prompt-version: 3 -->
 
 # Markdown workflow
 
 Perform only the requested downstream capabilities. The canonical Markdown was produced by the
-required RapidOCR → GPT-5.6-luna Parse stage. Do not rewrite it and do not request page images.
+required RapidOCR → gpt-6-sol Parse stage. Do not rewrite it and do not request page images.
+Visual descriptions labelled "not a transcription" are not evidence for exact extracted values.
+Review placeholders are abstentions, never source values. Cite verified text chunks for recovered
+visual text and preserve their source IDs.
 
 $capability_instructions
 

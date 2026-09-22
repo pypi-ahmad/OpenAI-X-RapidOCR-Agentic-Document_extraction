@@ -1,7 +1,7 @@
 """Run the real dual-engine Parse pipeline and compare it with a page-scoped oracle.
 
 Responsible for: executing the live Parse pipeline (RapidOCR, PP-DocLayoutV3,
-OpenAI Luna) against a real source PDF, writing generated artifacts, and
+OpenAI Sol) against a real source PDF, writing generated artifacts, and
 comparing output against a page-scoped oracle JSON.
 
 Must not: run without valid OpenAI credentials or fail to record comparison metrics.

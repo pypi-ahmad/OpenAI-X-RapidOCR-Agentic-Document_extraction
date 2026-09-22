@@ -24,7 +24,16 @@ from agentic_extractor.parse import PageParse
 from agentic_extractor.table_structure import build_chunks_with_tables
 
 _PAGE_MARKER = re.compile(r"<!--\s*page\s*:\s*(\d+)\s*-->", re.IGNORECASE)
-_SEMANTIC_TYPES = {"text", "marginalia", "logo", "attestation", "figure", "scan_code"}
+_SEMANTIC_TYPES = {
+    "text",
+    "marginalia",
+    "logo",
+    "attestation",
+    "figure",
+    "chart",
+    "equation",
+    "scan_code",
+}
 
 
 def build_landing_parse(
@@ -52,7 +61,7 @@ def build_landing_parse(
         "markdown": markdown,
         "metadata": {
             "job_id": f"local-{digest}",
-            "model_version": "rapidocr-gpt-5.6-luna-pp-doclayout-v3",
+            "model_version": "rapidocr-gpt-6-sol-pp-doclayout-v3",
             "page_count": page_count,
             "output_markdown_chars": len(markdown),
             "range_units": "unicode_codepoints",
@@ -62,6 +71,9 @@ def build_landing_parse(
             "billing": {"service_tier": "local", "total_credits": None},
         },
         "structure": {"type": "document", "children": pages},
+        "visual_objects": (result.cloud_output or {}).get("visual_objects", []),
+        "visual_audits": [audit for page in result.pages for audit in page.visual_audits],
+        "document_links": (result.cloud_output or {}).get("document_links", []),
     }
 
 
@@ -161,6 +173,9 @@ def _page_node(
             )
             node["_region_id"] = region_id
             node["_block_ids"] = list(chunk.source_block_ids)
+            node["source_id"] = chunk.id
+            node["provenance"] = chunk.provenance
+            node["verification"] = chunk.verification
         children.append((located, node))
     if not children and end > start:
         children.append(

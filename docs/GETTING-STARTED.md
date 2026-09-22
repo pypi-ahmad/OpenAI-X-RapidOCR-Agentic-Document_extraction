@@ -4,7 +4,7 @@
 Run the Agentic Document Extractor locally to turn PDF and image documents into
 grounded Markdown, structured results, and downloadable artifacts. Every
 successful extraction uses RapidOCR, PP-DocLayoutV3, and then OpenAI
-`gpt-5.6-luna`.
+`gpt-6-sol`.
 
 ## Prerequisites
 
@@ -13,7 +13,7 @@ successful extraction uses RapidOCR, PP-DocLayoutV3, and then OpenAI
 - [`uv`](https://docs.astral.sh/uv/) for Python and dependency management.
 - Python 3.13. The root project requires Python `>=3.13`, the layout worker
   requires Python `>=3.13,<3.14`, and `.python-version` pins `3.13`.
-- An `OPENAI_API_KEY` for an account with access to `gpt-5.6-luna`.
+- An `OPENAI_API_KEY` for an account with access to `gpt-6-sol`.
 - An NVIDIA GPU is optional. RapidOCR and PP-DocLayoutV3 prefer a usable CUDA
   device and can run on CPU when CUDA is unavailable.
 
@@ -95,9 +95,8 @@ Because the launcher reclaims port `8841`, close any unrelated application using
    full document. Images are treated as one page and do not show irrelevant
    range controls.
 4. Choose **Balanced** for compact grounded OCR/layout context, or **High
-   Accuracy** for full relevant OCR evidence. Pages without a page-wide review
-   region receive a low-detail overview; locally identified uncertainty receives
-   high-detail crops, and a page-wide high-detail region replaces that overview.
+   Accuracy** for full relevant OCR evidence. Both modes send every selected page
+   at high detail, with additional high-detail crops for locally identified uncertainty.
    In High Accuracy, each RapidOCR block
    with recognition confidence strictly below `0.85` must receive a grounded,
    accepted confirmation or correction from the existing GPT page-refinement
@@ -133,6 +132,19 @@ index; they do not run OCR again. Their results appear on the separate
 unsupported results remain review-required or abstained instead of being marked
 verified.
 
+## Review visual additions
+
+When Parse proposes missed text, an equation, or a figure/chart description, open
+**Visual content review** in the Parse result. Select an object to compare its source crop
+and content. `model_verified` means a model crop check, not human approval. Pending content
+is represented by a review placeholder in canonical Markdown.
+
+Choose **approve**, **correct**, or **reject**, enter a review reason, and select
+**Record visual decision**. Corrections require nonempty replacement content. The decision
+is appended to the visual audit and exports are rebuilt without another engine call.
+Raw OCR remains unchanged. Other unresolved review items can keep the workflow in
+`REVIEW_REQUIRED`. See [Visual review details](SOL-UPGRADE.md) for limits and provenance.
+
 ## Document chat
 
 After at least one Parse completes, open **Chat** from the top navigation. The
@@ -141,7 +153,7 @@ session-processed documents in scope. Chat history is stored per selected
 document scope. Switching scope loads its saved history, or starts empty for a
 new scope, so context is not mixed across scopes.
 
-Chat sends Luna only retrieved excerpts from the selected documents' generated
+Chat sends Sol only retrieved excerpts from the selected documents' generated
 Markdown and up to six recent visible conversation messages. It never sends the
 original upload, page images, OCR objects, or raw document bytes. Answers cite
 the excerpt IDs shown under the response. Off-topic requests are redirected to
@@ -168,7 +180,7 @@ application. The key must be available to the running process; the application
 does not read it from source files.
 
 If the key exists but model validation fails, verify that the credential is
-valid and can access `gpt-5.6-luna`. Configure `OPENAI_BASE_URL` only when a
+valid and can access `gpt-6-sol`. Configure `OPENAI_BASE_URL` only when a
 compatible endpoint explicitly requires it.
 
 ### RapidOCR is unavailable or cannot initialize

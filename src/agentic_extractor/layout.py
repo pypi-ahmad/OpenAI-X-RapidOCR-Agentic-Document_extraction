@@ -47,7 +47,7 @@ from agentic_extractor.table_structure import enrich_page_tables, normalize_tabl
 PP_DOC_LAYOUT_MODEL = "PP-DocLayoutV3"
 PP_DOC_LAYOUT_THRESHOLD = 0.5
 # Preserve detector recall at the table-model seam. The specialized table
-# classifier, structure model, grounding checks, and Luna review remain the
+# classifier, structure model, grounding checks, and Sol review remain the
 # acceptance gates, so this threshold should not pre-emptively discard regions.
 TABLE_STRUCTURE_CANDIDATE_THRESHOLD = PP_DOC_LAYOUT_THRESHOLD
 PP_DOC_LAYOUT_LABELS = (
@@ -438,7 +438,7 @@ def _apply_table_structures(local: Any, selected: list[Any], resource: PPDocLayo
                 # Worker never returned this region (see the failures dict
                 # above): fail closed with an explicit invalid/review-required
                 # row rather than dropping the table region silently, so the
-                # gap is visible in the manifest and to Luna's table review.
+                # gap is visible in the manifest and to Sol's table review.
                 from agentic_extractor.models import TableStructureEvidence
 
                 tables.append(
@@ -637,7 +637,7 @@ def enrich_page_layout(page: PageParse, regions: list[LayoutRegion]) -> None:
         }
     )
     if not regions:
-        page.warnings.append("PP-DocLayoutV3 returned no regions; Luna review is required.")
+        page.warnings.append("PP-DocLayoutV3 returned no regions; Sol review is required.")
     page.chunks = build_layout_chunks(page.blocks)
 
 

@@ -412,7 +412,7 @@ def test_mocked_dual_engine_api_flow_exports_audited_bundle() -> None:
 
     class Models:
         def retrieve(self, model: str) -> None:
-            assert model == "gpt-5.6-luna"
+            assert model == "gpt-6-sol"
 
     class Responses:
         def __init__(self) -> None:
@@ -473,7 +473,7 @@ def test_mocked_dual_engine_api_flow_exports_audited_bundle() -> None:
     assert extracted.json()["state"] == "ACCEPTED"
     assert engine.calls == 1
     assert len(responses.calls) == 2
-    assert all(call["model"] == "gpt-5.6-luna" for call in responses.calls)
+    assert all(call["model"] == "gpt-6-sol" for call in responses.calls)
     assert all(call["reasoning"] == {"effort": "medium"} for call in responses.calls)
     assert all(item["type"] == "input_text" for item in responses.calls[1]["input"][0]["content"])
 
@@ -489,6 +489,6 @@ def test_mocked_dual_engine_api_flow_exports_audited_bundle() -> None:
         manifest = json.loads(archive.read("manifest.json"))
     assert manifest["manifest_version"] == 7
     assert manifest["agent_workflow"]["current_state"] == "ACCEPTED"
-    assert manifest["processing"]["gpt_model"] == "gpt-5.6-luna"
+    assert manifest["processing"]["gpt_model"] == "gpt-6-sol"
     assert manifest["processing"]["reasoning_effort"] == "medium"
     assert manifest["usage_and_cost"]["gpt"]["call_count"] == 2

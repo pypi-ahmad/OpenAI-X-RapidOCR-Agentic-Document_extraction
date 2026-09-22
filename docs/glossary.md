@@ -6,14 +6,14 @@
 | ADE | Agentic document extraction: a bounded workflow for parsing, classifying, sectioning, splitting, extracting, validating, and reviewing documents. |
 | Abstention | An explicit decision not to claim a classification, refinement, or field value when support is insufficient; it is retained with a reason instead of being treated as verified. |
 | Artifact | A selected-page output: Markdown, Parse JSON, annotated PDF, coordinate HTML, manifest, or ZIP bundle. |
-| Balanced | Dual-engine mode using compact OCR context, low-detail page overviews, and high-detail crops only for uncertain regions. |
+| Balanced | Compact OCR context, high-detail page images, and additional high-detail crops for uncertain regions. |
 | Block | A page-grounded unit of OCR text with type, raw confidence, and optional geometry; its position in the page's ordered block list represents reconstructed reading order. |
 | Canonical Parse result | `LocalParseResult`, the evidence-bearing input to workflow evaluation and artifact generation. |
 | Chunk ID | The stable identifier of a layout chunk that groups one or more source blocks and can ground sections or extracted fields. |
 | Cloud refinement | Required GPT validation and correction performed after RapidOCR. It is not an independent source of truth. |
 | Evidence | A citation to an existing OCR block or chunk, or to a normalized region on an image that GPT received. |
 | Grounding | The page, block ID, quote, bounding box, or polygon that connects an output to its source. |
-| High Accuracy | Dual-engine mode using full relevant OCR evidence, low-detail page overviews, and high-detail crops only for uncertain regions. |
+| High Accuracy | Full relevant OCR evidence, high-detail page images, and additional high-detail crops for uncertain regions. |
 | HTML | Self-contained viewer with embedded OCR-aligned page rasters and coordinate-positioned raw/refined text. |
 | Manifest | Versioned JSON audit metadata describing selected pages, engines, routing, attempts, usage, quality diagnostics, workflow state, refinements, and generated artifacts. |
 | Normalized value | A typed conversion accepted by schema-aware normalization, such as a numeric string converted to a number. |

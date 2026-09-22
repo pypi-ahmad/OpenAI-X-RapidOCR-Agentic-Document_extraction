@@ -23,7 +23,7 @@ st.caption("Engine readiness and processing warnings for the current session.")
 
 st.subheader("Engine status")
 if SETTINGS.openai_configured:
-    st.success("OpenAI API configured · gpt-5.6-luna")
+    st.success("OpenAI API configured · gpt-6-sol")
 else:
     st.error(
         "OpenAI is not configured. Add OPENAI_API_KEY to the launcher environment, "

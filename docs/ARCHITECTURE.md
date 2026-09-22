@@ -5,7 +5,7 @@
 Agentic document extractor is a local-machine system for extracting structured, source-grounded content from PDF and image files. The extraction pipeline requires three sequential stages for every successful execution:
 1. RapidOCR for optical character recognition, text detection, and polygon extraction.
 2. PP-DocLayoutV3 (executing in an isolated worker process) for document region detection, reading order normalization, and table structure parsing.
-3. OpenAI `gpt-5.6-luna` (configured with `reasoning_effort="medium"`) for semantic refinement, error correction, and structured field extraction.
+3. OpenAI `gpt-6-sol` (configured with `reasoning_effort="medium"`) for semantic refinement, error correction, and structured field extraction.
 
 The Streamlit user interface and the local FastAPI service share this canonical pipeline. Neither entry point implements document extraction independently.
 
@@ -47,7 +47,7 @@ flowchart TD
         direction TB
         RefinerMod["OpenAIRefiner (openai_refiner.py)"]
         PromptsMod["Packaged Markdown prompts (prompts/*.md)"]
-        OpenAIAPI["OpenAI API (gpt-5.6-luna)"]
+        OpenAIAPI["OpenAI API (gpt-6-sol)"]
     end
 
     subgraph ValidationAndAudit["Validation and adjudication"]
@@ -100,10 +100,21 @@ flowchart TD
 4. Layout and reading order detection: `layout.py` communicates with the isolated `tools/pp_doclayout` worker process via standard I/O JSON IPC. The worker runs PP-DocLayoutV3 to classify document regions and determine reading order.
 5. Table analysis: `layout.py` crops detected table regions and invokes table classification (wired vs. wireless) and SLAN structure models in the worker. `table_structure.py` maps predicted table cells to RapidOCR blocks and produces sanitized HTML table representations.
 6. Visual routing and checkbox analysis: `checkbox_vision.py` detects square checkboxes and pixel states using OpenCV. `visual_routing.py` identifies high-uncertainty regions (low OCR scores, complex tables, candidate checkboxes) to be passed as high-detail image crops to OpenAI.
-7. Semantic refinement: `openai_refiner.py` sends grounded text context and routed image crops to `gpt-5.6-luna`. Luna verifies OCR text, corrects OCR misrecognitions, and confirms checkbox states.
+7. Semantic refinement: `openai_refiner.py` sends grounded text context, every selected page at high image detail, and routed crops to `gpt-6-sol`. It proposes OCR corrections, semantic groups, visual additions, and document links. Table review and eligible checkbox crop verification use the same model.
 8. Downstream workflows: If requested, Classify, Section, Split, and Extract workflows execute using the refined Markdown and grounding index without re-running OCR.
 9. Deterministic validation and adjudication: `capabilities.py` and `workflow.py` validate field types, regex patterns, date formats, and business rules, transitioning the job to `ACCEPTED`, `REVIEW_REQUIRED`, or `FAILED`.
 10. Artifact creation: Core artifacts (Markdown, `parse-result.json`, `manifest.json`) are finalized immediately. Heavy visual artifacts (`annotated.pdf`, `document.html`, `bundle.zip`) are generated lazily upon download or view.
+
+Steps 7–9 are coordinated by `run_workflow_from_parse`. A fresh Parse enters a loop of at
+most two repair rounds. Each round can independently inspect up to eight pending visual
+objects, rebuild canonical Markdown, run requested downstream workflows, and attempt scoped
+repair of eligible review items. Unchanged review findings stop further rounds. A reused
+Parse skips new visual-object crop inspections; downstream workflows do not rerun OCR.
+The bound is on repair rounds, not all OpenAI calls: initial page batches, table review,
+checkbox verification, and requested downstream operations have their own calls.
+
+`rich_document.py` renders accepted visual additions without inserting raw OCR blocks.
+`app_pages/visual_review.py` records human decisions and rebuilds exports without engine calls.
 
 ## Main types and state
 
@@ -114,6 +125,8 @@ The primary domain models and application states are defined across the followin
 | `DocumentRequest` | `src/agentic_extractor/models.py` | Command object containing file bytes, file name, selected pages, processing mode (`Balanced` vs. `High Accuracy`), active capabilities, and schema inputs. |
 | `Block` | `src/agentic_extractor/models.py` | Immutable representation of an individual OCR text segment, including bounding polygon coordinates, text content, line index, and confidence score. |
 | `PageParse` | `src/agentic_extractor/parse.py` | Per-page parsing container holding raw `Block` elements, layout regions, reading order sequences, and rendered page image data. |
+| `VisualObject` / `DocumentLink` | `src/agentic_extractor/rich_document.py` | Visual content and relationship proposals; crop decisions and human audits are kept separate from raw OCR. |
+| `RequestBudget` | `src/agentic_extractor/budget.py` | Optional token-count-based cost reservations used by the synthetic live runner; not a default UI/API spending limit. |
 | `LocalParseResult` | `src/agentic_extractor/ocr.py` | Aggregated result of local ingestion and OCR across all selected pages, containing immutable raw blocks, layout regions, quality metrics, warnings, and engine provenance. |
 | `AgentWorkflowResult` | `src/agentic_extractor/workflow.py` | End-to-end workflow container tracking state transitions, audit event logs, extracted fields, field corrections, and human review items. |
 | `LocalArtifacts` | `src/agentic_extractor/artifacts.py` | Artifact management container providing cached access to generated Markdown, LandingAI Parse JSON, annotated PDF bytes, HTML viewer bytes, and ZIP archive bundles. |
@@ -129,9 +142,10 @@ The application interacts with the following external systems and boundaries:
 ### OpenAI Responses API
 
 - Endpoint: Default `https://api.openai.com/v1` (overridable via `OPENAI_BASE_URL`).
-- Model: `gpt-5.6-luna`.
+- Model: `gpt-6-sol`.
 - Parameters: `reasoning_effort="medium"`.
-- Usage: Invoked for Parse page refinement, independent checkbox crop verification, dedicated table structure review, downstream agentic capabilities (Classify, Section, Split, Extract), and grounded document chat.
+- Usage: Invoked for Parse page refinement, independent checkbox and visual-object crop verification, dedicated table structure review, downstream agentic capabilities (Classify, Section, Split, Extract), repair, and grounded document chat.
+- Request limits: `max_output_tokens=16384`, `store=False`, no external tools, and no automatic SDK retries. Refused, incomplete, or unparseable responses are not accepted; available usage is retained before structured parsing.
 - Contract: Communication uses JSON structured outputs. Prompts are loaded from versioned Markdown templates under `src/agentic_extractor/prompts/` and tracked by SHA-256 digests in audit manifests.
 
 ### PP-DocLayoutV3 worker subprocess
@@ -156,8 +170,8 @@ flowchart LR
     ScopeFilter --> Chunking["Markdown heading & page chunking"]
     Chunking --> LexicalRanker["Lexical keyword retrieval"]
     LexicalRanker --> ContextWindow["Context assembly (max 40k chars, top 12 chunks)"]
-    ContextWindow --> LunaChat["gpt-5.6-luna (packaged chat prompt)"]
-    LunaChat --> CitationValidator["Citation verification against chunk IDs"]
+    ContextWindow --> SolChat["gpt-6-sol (packaged chat prompt)"]
+    SolChat --> CitationValidator["Citation verification against chunk IDs"]
     CitationValidator --> AnswerDisplay["Grounded answer and citations"]
 ```
 

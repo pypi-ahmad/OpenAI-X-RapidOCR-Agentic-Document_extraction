@@ -1,4 +1,4 @@
-"""Opt-in paid prompt checks against GPT-5.6-luna."""
+"""Opt-in paid prompt checks against gpt-6-sol."""
 
 from __future__ import annotations
 

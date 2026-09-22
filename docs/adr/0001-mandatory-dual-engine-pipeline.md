@@ -13,10 +13,10 @@ alone would violate the product contract implemented by the workflow.
 
 ## Decision
 
-Every extraction validates access to OpenAI `gpt-5.6-luna` before processing
+Every extraction validates access to OpenAI `gpt-6-sol` before processing
 document content. After that preflight succeeds, RapidOCR produces the local first pass, then
 PP-DocLayoutV3 runs on every selected page before any GPT refinement request. Every GPT request uses
-`gpt-5.6-luna` with medium reasoning effort. Missing or invalid OpenAI
+`gpt-6-sol` with medium reasoning effort. Missing or invalid OpenAI
 configuration, RapidOCR or PP-DocLayoutV3 initialization or processing failure, and required
 GPT refinement failure all prevent successful completion. The application has
 no RapidOCR-only successful mode.
@@ -31,12 +31,11 @@ sends full relevant OCR evidence for every selected page.
 
 - Raw geometry is available before semantic refinement.
 - The application cannot complete extraction offline.
-- Both modes send every selected page as a low-detail overview unless a page-wide
-  high-detail review region replaces it, route other locally identified uncertainty
-  to high-detail crops, and make at least one GPT call.
+- Both modes send every selected page at high detail, route locally identified uncertainty
+  to additional high-detail crops, and make at least one GPT call.
 - Tests prove OpenAI preflight precedes RapidOCR, RapidOCR precedes refinement,
   both modes invoke GPT, and requests use the fixed model settings.
-- UI, API, manifests, and documentation describe RapidOCR and GPT-5.6-luna as the
+- UI, API, manifests, and documentation describe RapidOCR and gpt-6-sol as the
   mandatory dual engines, with PP-DocLayoutV3 as a required local layout stage.
 
 See [Architecture](../ARCHITECTURE.md) for the runtime flow and

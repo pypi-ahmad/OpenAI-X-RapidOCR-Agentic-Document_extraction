@@ -132,12 +132,25 @@ environment-variable settings. Most are defined by `Settings` in
 | `max_image_pixels` | `25,000,000` | Maximum decoded pixels per image page. |
 | `render_dpi` | `150` | PDF render resolution. |
 | `job_ttl_seconds` | `3600` | Lifetime of an in-memory API job. Expired jobs are removed during job lookup and return `job_not_found`. |
-| `model` | `gpt-5.6-luna` | Declared model policy value. The request boundary also uses `gpt-5.6-luna`. |
+| `model` | `gpt-6-sol` | Declared model policy value. The request boundary also uses `gpt-6-sol`. |
 | `reasoning_effort` | `medium` | Declared reasoning policy value. The request boundary also uses `medium`. |
 | `cloud_batch_characters` | `80,000` | Rendered evidence-character budget for packed compact-page refinement requests. Full/high-resolution pages and oversized compact pages are isolated. Evidence is never truncated. |
-| OpenAI request retries | `2` | Maximum automatic retries configured on the shared OpenAI client. |
+| OpenAI request retries | `0` | SDK retries are disabled; malformed structured output is not blindly retried. Bounded workflow repair is a separate operation. |
 | OpenAI request timeout | `120` seconds | Timeout configured on the shared OpenAI client. |
+| OpenAI output-token cap | `16,384` | `max_output_tokens` on every Responses generation request, including reasoning output. |
+| Workflow repair rounds | `2` maximum | Stops earlier when review findings are unchanged or no review is needed. Not a two-call limit for the entire document. |
+| Visual-object inspection | `8` per round | Pending objects are inspected at most once per workflow invocation; remaining objects require review. |
+| PDF inspection resolution | Up to `300` DPI | Additional rasters for pages referenced by the first 16 visual proposals; bounded by `max_image_pixels`. No additional OCR pass. |
 | High Accuracy block review threshold | `0.85` | Fixed code policy: OCR blocks with a score strictly below `0.85` require a grounded refinement outcome in High Accuracy mode. A score equal to `0.85` is not below the threshold. This is not user-configurable. |
+
+## Opt-in validation budget
+
+The optional `RequestBudget` in `src/agentic_extractor/budget.py` is attached by the
+synthetic validation runner, not by normal UI/API processing. Its limit must be greater
+than zero and at most $5. It counts input tokens before generation, reserves worst-case
+cost, and keeps reservations when cache details are incomplete. Unknown total cost
+blocks further budgeted generation. A configured ledger is written before generation
+and after settlement. See [Testing](TESTING.md) for the opt-in command and restart limits.
 
 ## Process caches
 
@@ -198,10 +211,10 @@ environment-variable overrides.
 
 | Token category | USD per 1 million tokens |
 | --- | ---: |
-| Uncached input | `$0.20` |
-| Cached input | `$0.02` |
-| Cache-write input | `$0.25` |
-| Output | `$1.20` |
+| Uncached input | `$2.00` |
+| Cached input | `$0.20` |
+| Cache-write input | `$2.50` |
+| Output | `$10.00` |
 
 For a request above `272,000` input tokens, the calculator applies a `2.0x`
 multiplier to all input categories and a `1.5x` multiplier to output. A request

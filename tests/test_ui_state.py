@@ -290,6 +290,65 @@ def test_usage_panel_shows_current_and_cumulative_session_totals() -> None:
     assert call_table["evidence_characters"][0] == 50
 
 
+def test_visual_review_updates_exports_without_calling_an_engine(monkeypatch) -> None:
+    from agentic_extractor.openai_refiner import CloudResult, OpenAIRefiner
+    from agentic_extractor.pipeline import render_result_markdown
+    from agentic_extractor.rich_document import VisualObject
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("UI review must not make a paid call")
+
+    monkeypatch.setattr(OpenAIRefiner, "_request", forbidden)
+    item = VisualObject(
+        id="visual-1",
+        page=1,
+        kind="text",
+        bbox=[0.1, 0.1, 0.8, 0.5],
+        content="Total 42",
+        reading_order=1,
+    )
+    local = LocalParseResult(
+        document_metadata={"file_name": "synthetic.png"},
+        selected_pages=[1],
+        pages=[PageParse(page=1, width=20, height=10, image_bytes=png_upload()[1])],
+        markdown="",
+        engine=EngineProvenance("RapidOCR", "test", "CPU"),
+        timings={},
+        cloud_output=CloudResult(
+            refined_markdown="", reviewed_pages=[1], visual_objects=[item]
+        ).model_dump(mode="json"),
+    )
+    local.markdown = render_result_markdown(local)
+    workflow = AgentWorkflowResult(
+        current_state=WorkflowState.REVIEW_REQUIRED,
+        events=[],
+        review_required=["Visual object 'visual-1' requires review: crop not verified."],
+    )
+    app = AppTest.from_file(
+        Path(__file__).parents[1] / "streamlit_app.py", default_timeout=20
+    ).run()
+    app.session_state["result"] = local
+    app.session_state["workflow"] = workflow
+    app.session_state["artifacts"] = build_local_artifacts(local)
+    app.run()
+    assert not app.exception
+    next(widget for widget in app.selectbox if widget.label == "Decision").set_value("correct")
+    next(widget for widget in app.text_area if widget.label == "Corrected content").set_value(
+        "Total 43"
+    )
+    next(widget for widget in app.text_input if widget.label == "Review reason").set_value(
+        "Read crop"
+    )
+    next(widget for widget in app.button if widget.label == "Record visual decision").click().run()
+    assert not app.exception
+    reviewed = app.session_state["result"]
+    assert "Total 43" in reviewed.markdown
+    assert reviewed.pages[0].blocks == []
+    assert reviewed.pages[0].visual_audits[0]["actor"] == "user"
+    assert b"Total 43" in app.session_state["artifacts"].markdown
+    assert app.session_state["workflow"].current_state is WorkflowState.ACCEPTED
+
+
 def test_checkbox_review_records_audited_user_decision() -> None:
     image = Image.new("RGB", (100, 100), "white")
     output = io.BytesIO()

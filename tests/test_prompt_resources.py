@@ -31,6 +31,7 @@ def test_versioned_prompts_are_packaged_markdown_resources() -> None:
         "document-chat-system.md",
         "document-chat-request.md",
         "table-review.md",
+        "visual-object-verification.md",
     }
     packaged = {item.name for item in files("agentic_extractor.prompts").iterdir()}
 
@@ -39,24 +40,30 @@ def test_versioned_prompts_are_packaged_markdown_resources() -> None:
         prompt = load_prompt(name)
         expected_version = (
             "1"
-            if name in {"document-chat-system.md", "document-chat-request.md"}
+            if name
+            in {
+                "document-chat-system.md",
+                "document-chat-request.md",
+                "visual-object-verification.md",
+            }
             else "7"
             if name in {"page-context-full.md", "page-context-compact.md"}
             else "3"
             if name
             in {
                 "refinement.md",
+                "markdown-workflow.md",
                 "block-context-full.md",
                 "block-context-compact.md",
             }
-            else "16"
+            else "17"
             if name == "capability-parse.md"
             else "11"
             if name == "table-review.md"
             else "5"
-            if name == "checkbox-discovery.md"
+            if name in {"checkbox-discovery.md", "checkbox-verification.md"}
             else "4"
-            if name in {"checkbox-verification.md", "visual-page.md"}
+            if name == "visual-page.md"
             else "2"
         )
         assert prompt.version == expected_version

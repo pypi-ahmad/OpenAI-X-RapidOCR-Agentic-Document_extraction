@@ -1,7 +1,7 @@
 """The only OpenAI boundary. Model policy is intentionally not caller-configurable.
 
 Responsible for: the single external boundary calling OpenAI Responses API
-with fixed model `gpt-5.6-luna` (`reasoning_effort="medium"`). Handles prompt
+with fixed model `gpt-6-sol` (`reasoning_effort="medium"`). Handles prompt
 template rendering, structured output parsing, token usage collection, visual
 crop routing, checkbox verification, dedicated table reviews, and document
 chat turns.
@@ -19,14 +19,17 @@ from __future__ import annotations
 import base64
 import io
 import json
+import threading
 import time
 from dataclasses import dataclass
+from types import SimpleNamespace
 from typing import Annotated, Any, Literal, cast
 
 from openai import OpenAI
 from PIL import Image
-from pydantic import BaseModel, Field, ValidationError, WithJsonSchema
+from pydantic import BaseModel, Field, WithJsonSchema
 
+from agentic_extractor.budget import RequestBudget
 from agentic_extractor.checkbox_vision import is_credible_checkbox_candidate
 from agentic_extractor.config import SETTINGS, Settings
 from agentic_extractor.costs import (
@@ -46,6 +49,12 @@ from agentic_extractor.document_chat import (
 from agentic_extractor.models import TableStructureEvidence, UsageRecord
 from agentic_extractor.parse import PageParse, build_layout_chunks
 from agentic_extractor.prompt_resources import PromptResource, load_prompt, render_prompt
+from agentic_extractor.rich_document import (
+    DocumentLink,
+    VisualObject,
+    VisualVerification,
+    prepare_visual_objects,
+)
 from agentic_extractor.table_structure import (
     table_review_bbox,
     table_review_block_ids,
@@ -129,7 +138,7 @@ def _bbox_center_in(box: list[float], container: list[float]) -> bool:
 
 
 def _local_semantic_regions(page: PageParse) -> list[list[Any]]:
-    """Group every OCR block once using local layout evidence before Luna."""
+    """Group every OCR block once using local layout evidence before Sol."""
     blocks = {block.id: block for block in page.blocks}
     block_order = {block.id: index for index, block in enumerate(page.blocks)}
     regions = {region.id: region for region in page.layout_regions}
@@ -241,7 +250,7 @@ def _union_block_bboxes(blocks: list[Any]) -> list[float] | None:
 def _add_semantic_table_candidates(
     pages: list[PageParse], proposals: list[CloudSemanticRegion]
 ) -> None:
-    """Route grounded Luna table regions through the existing table validator."""
+    """Route grounded Sol table regions through the existing table validator."""
     by_page: dict[int, list[CloudSemanticRegion]] = {}
     for proposal in proposals:
         if proposal.type == "table":
@@ -507,6 +516,8 @@ class CloudResult(BaseModel):
     checkboxes: list[CloudCheckbox] = Field(default_factory=list)
     table_reviews: list[CloudTableReview] = Field(default_factory=list)
     semantic_regions: list[CloudSemanticRegion] = Field(default_factory=list)
+    visual_objects: list[VisualObject] = Field(default_factory=list)
+    document_links: list[DocumentLink] = Field(default_factory=list)
 
 
 class MarkdownWorkflowResult(BaseModel):
@@ -525,7 +536,7 @@ class OpenAIRefiner:
             self.client = client or OpenAI(
                 api_key=settings.openai_api_key,
                 base_url=settings.openai_base_url,
-                max_retries=2,
+                max_retries=0,
                 timeout=120,
             )
         except RuntimeError as exc:
@@ -534,6 +545,15 @@ class OpenAIRefiner:
                 "restart the application, and retry."
             ) from exc
         self._configuration_validated = False
+        self._attempts = threading.local()
+        self.budget: RequestBudget | None = None
+
+    @property
+    def request_usage(self) -> list[UsageRecord]:
+        """Isolate billing between concurrent local API worker threads."""
+        if not hasattr(self._attempts, "usage"):
+            self._attempts.usage = []
+        return self._attempts.usage
 
     def validate_configuration(self) -> None:
         """Validate credentials without sending document content."""
@@ -543,7 +563,7 @@ class OpenAIRefiner:
             self.client.models.retrieve(MODEL_NAME)
         except Exception as exc:
             raise OpenAIConfigurationError(
-                "OpenAI configuration could not access gpt-5.6-luna. Configure a valid "
+                "OpenAI configuration could not access gpt-6-sol. Configure a valid "
                 "OPENAI_API_KEY and, only when required, OPENAI_BASE_URL, then retry."
             ) from exc
         self._configuration_validated = True
@@ -708,18 +728,18 @@ class OpenAIRefiner:
             except Exception as exc:
                 page_numbers = [page.page for page in batch]
                 raise RuntimeError(
-                    f"GPT-5.6-luna {planned_batch.kind} batch "
+                    f"gpt-6-sol {planned_batch.kind} batch "
                     f"{batch_index}/{len(batches)} for pages {page_numbers} failed: {exc}"
                 ) from exc
             elapsed = time.perf_counter() - started
             parsed = response.output_parsed
             if parsed is None:
                 raise RuntimeError("OpenAI returned no structured result.")
-            # Completeness invariant: Luna must acknowledge and review every requested page
+            # Completeness invariant: Sol must acknowledge and review every requested page
             # in the batch; partial reviews are rejected to preserve full document coverage.
             expected_pages = [page.page for page in batch]
             if sorted(parsed.reviewed_pages) != expected_pages:
-                raise RuntimeError("GPT-5.6-luna must review every requested page exactly once.")
+                raise RuntimeError("gpt-6-sol must review every requested page exactly once.")
             redaction_pages = {
                 candidate.id: page.page
                 for page in batch
@@ -734,7 +754,7 @@ class OpenAIRefiner:
             ]
             if len(reviewed_redactions) != len(set(reviewed_redactions)):
                 raise RuntimeError(
-                    "GPT-5.6-luna returned duplicate outcomes for a local redaction candidate."
+                    "gpt-6-sol returned duplicate outcomes for a local redaction candidate."
                 )
             missing_redactions = sorted(redaction_ids - set(reviewed_redactions))
             for candidate_id in missing_redactions:
@@ -743,12 +763,12 @@ class OpenAIRefiner:
                         page=redaction_pages[candidate_id],
                         block_id=candidate_id,
                         abstained=True,
-                        warning="GPT-5.6-luna omitted this local redaction candidate.",
+                        warning="gpt-6-sol omitted this local redaction candidate.",
                     )
                 )
             if missing_redactions:
                 parsed.warnings.append(
-                    "GPT-5.6-luna omitted local redaction candidates; they were recorded as "
+                    "gpt-6-sol omitted local redaction candidates; they were recorded as "
                     "abstentions and were not published: " + ", ".join(missing_redactions)
                 )
             separator = "\n\n" if aggregate.refined_markdown else ""
@@ -763,6 +783,8 @@ class OpenAIRefiner:
             aggregate.checkboxes.extend(parsed.checkboxes)
             aggregate.table_reviews.extend(parsed.table_reviews)
             aggregate.semantic_regions.extend(parsed.semantic_regions)
+            aggregate.visual_objects.extend(parsed.visual_objects)
+            aggregate.document_links.extend(parsed.document_links)
             resources = list(packet.resources)
             resources.extend(visual_resources)
             context = dict(packet.metrics)
@@ -786,6 +808,12 @@ class OpenAIRefiner:
             )
             call_usages.append(call)
         _add_semantic_table_candidates(pages, aggregate.semantic_regions)
+        original_objects = aggregate.visual_objects
+        aggregate.visual_objects = prepare_visual_objects(original_objects)
+        id_map = {item.id: prepare_visual_objects([item])[0].id for item in original_objects}
+        for link in aggregate.document_links:
+            link.source_id = id_map.get(link.source_id, link.source_id)
+            link.target_id = id_map.get(link.target_id, link.target_id)
         if any(page.table_structures for page in pages):
             table_result, table_usage = self.review_tables(pages)
             table_pages = {review.page for review in table_result.reviews}
@@ -796,7 +824,7 @@ class OpenAIRefiner:
             call_usages.append(table_usage)
         expected_pages = [page.page for page in pages]
         if sorted(aggregate.reviewed_pages) != sorted(expected_pages):
-            raise RuntimeError("GPT-5.6-luna must review every requested page exactly once.")
+            raise RuntimeError("gpt-6-sol must review every requested page exactly once.")
         aggregate.reviewed_pages = expected_pages
         if len(batches) > 1 and capabilities - {"Parse"}:
             reconciled, usage = self._reconcile(
@@ -900,10 +928,10 @@ class OpenAIRefiner:
             if coverage_is_exact:
                 break
             if attempt:
-                raise RuntimeError("GPT-5.6-luna must review every table candidate exactly once.")
+                raise RuntimeError("gpt-6-sol must review every table candidate exactly once.")
         elapsed = time.perf_counter() - started
         if any(review.page != expected[review.table_id] for review in parsed.reviews):
-            raise RuntimeError("GPT-5.6-luna table review referenced an unexpected page.")
+            raise RuntimeError("gpt-6-sol table review referenced an unexpected page.")
         usage = self._read_usage(
             response,
             review_pages,
@@ -964,6 +992,14 @@ class OpenAIRefiner:
                         block.text,
                     ]
                 )
+            for chunk in chunks:
+                if chunk.provenance == "gpt-visual" and chunk.verification in {
+                    "model_verified",
+                    "human_approved",
+                }:
+                    grounding.append(
+                        [page.page, None, chunk.id, chunk.type, None, chunk.bbox, chunk.text]
+                    )
         grounding_json = _prompt_json(grounding)
         issues_json = _prompt_json(issues or [])
         target_ids = sorted(
@@ -996,7 +1032,7 @@ class OpenAIRefiner:
             raise RuntimeError("OpenAI returned no structured Markdown workflow result.")
         expected_pages = sorted(page.page for page in pages)
         if sorted(parsed.reviewed_pages) != expected_pages:
-            raise RuntimeError("GPT-5.6-luna Markdown workflow must cover every selected page.")
+            raise RuntimeError("gpt-6-sol Markdown workflow must cover every selected page.")
         cloud = CloudResult(
             refined_markdown=markdown,
             reviewed_pages=parsed.reviewed_pages,
@@ -1078,7 +1114,7 @@ class OpenAIRefiner:
         expected = sorted(candidate.id for candidate in candidates)
         actual = sorted(item.id for item in parsed.verifications)
         if actual != expected:
-            raise RuntimeError("GPT-5.6-luna must verify every requested checkbox exactly once.")
+            raise RuntimeError("gpt-6-sol must verify every requested checkbox exactly once.")
         verification_pages = [
             page_map[number]
             for number in dict.fromkeys(candidate.page for candidate in candidates)
@@ -1161,7 +1197,7 @@ class OpenAIRefiner:
             raise RuntimeError("OpenAI returned no structured reconciliation result.")
         expected_pages = sorted(page.page for page in pages)
         if sorted(parsed.reviewed_pages) != expected_pages:
-            raise RuntimeError("GPT-5.6-luna reconciliation must cover every selected page.")
+            raise RuntimeError("gpt-6-sol reconciliation must cover every selected page.")
         return parsed, self._read_usage(
             response,
             pages,
@@ -1256,7 +1292,7 @@ class OpenAIRefiner:
             raise RuntimeError("OpenAI returned no structured repair result.")
         expected_pages = sorted(page.page for page in pages)
         if sorted(parsed.reviewed_pages) != expected_pages:
-            raise RuntimeError("GPT-5.6-luna repair must review every requested page exactly once.")
+            raise RuntimeError("gpt-6-sol repair must review every requested page exactly once.")
         resources = [*packet.resources, repair_resource]
         resources.extend(visual_resources)
         context = dict(packet.metrics)
@@ -1369,6 +1405,46 @@ class OpenAIRefiner:
         crop.save(output, "JPEG", quality=95, optimize=True)
         return output.getvalue()
 
+    def verify_visual_objects(
+        self, pages: list[PageParse], objects: list[VisualObject]
+    ) -> tuple[VisualVerification, UsageRecord]:
+        """One allowlisted crop inspection, bounded to eight proposals per repair round."""
+        page_map = {page.page: page for page in pages}
+        if len(objects) > 8 or not objects:
+            raise ValueError("Visual verification requires one to eight objects.")
+        prompt = load_prompt("visual-object-verification.md")
+        content: list[dict[str, Any]] = [{"type": "input_text", "text": prompt.text}]
+        for item in objects:
+            page = page_map[item.page]
+            crop = self._region_crop(
+                page.inspection_image_bytes or page.original_image_bytes or page.image_bytes,
+                item.bbox,
+            )
+            content.extend(
+                [
+                    {"type": "input_text", "text": _prompt_json(item.model_dump(mode="json"))},
+                    {
+                        "type": "input_image",
+                        "image_url": "data:image/jpeg;base64,"
+                        + base64.b64encode(crop).decode("ascii"),
+                        "detail": "high",
+                    },
+                ]
+            )
+        started = time.perf_counter()
+        response = self._request(content, VisualVerification)
+        usage = self._read_usage(
+            response,
+            [page_map[number] for number in sorted({item.page for item in objects})],
+            {item.page for item in objects},
+            time.perf_counter() - started,
+            [prompt],
+            purpose="visual_object_verification",
+        )
+        if response.output_parsed is None:
+            raise RuntimeError("OpenAI returned no visual verification.")
+        return response.output_parsed, usage
+
     def _request(
         self,
         content: list[dict[str, Any]],
@@ -1377,7 +1453,7 @@ class OpenAIRefiner:
         policy_name: Literal["policy.md", "document-chat-system.md"] = "policy.md",
     ) -> Any:
         policy = load_prompt(policy_name)
-        request = {
+        request: dict[str, Any] = {
             "model": MODEL_NAME,
             "reasoning": {"effort": REASONING_EFFORT},
             "store": False,
@@ -1385,14 +1461,72 @@ class OpenAIRefiner:
             "instructions": policy.text,
             "input": cast(Any, [{"role": "user", "content": content}]),
             "text_format": text_format,
+            "max_output_tokens": 16384,
         }
+        reservation = None
+        if self.budget is not None:
+            # Use the same SDK schema converter as Responses.parse, including strict fields.
+            from openai.lib._pydantic import to_strict_json_schema
+
+            count_request: dict[str, Any] = {
+                key: value
+                for key, value in request.items()
+                if key not in {"text_format", "store", "max_output_tokens"}
+            }
+            count_request["text"] = {
+                "format": {
+                    "type": "json_schema",
+                    "name": text_format.__name__,
+                    "strict": True,
+                    "schema": to_strict_json_schema(text_format),
+                }
+            }
+            counted = self.client.responses.input_tokens.count(**count_request)
+            reservation = self.budget.reserve(counted.input_tokens, 16384)
+        started = time.perf_counter()
+        response = None
+        accepted = False
         try:
-            return self.client.responses.parse(**request)
-        except ValidationError:
-            # The SDK can receive an otherwise successful response whose JSON
-            # text was cut off before Pydantic parsing. Retry that idempotent,
-            # non-stored request once; a second invalid response still fails.
-            return self.client.responses.parse(**request)
+            raw_interface = getattr(self.client.responses, "with_raw_response", None)
+            if raw_interface is not None:
+                raw = raw_interface.parse(**request)
+                # Capture billing before schema parsing can fail or the SDK raises for truncation.
+                response = json.loads(
+                    raw.http_response.text, object_hook=lambda value: SimpleNamespace(**value)
+                )
+                parsed = raw.parse()
+            else:
+                parsed = self.client.responses.parse(**request)
+                response = parsed
+            if getattr(parsed, "status", "completed") != "completed":
+                raise RuntimeError("OpenAI response was incomplete; human review is required.")
+            for output in getattr(parsed, "output", []):
+                if any(
+                    getattr(part, "type", None) == "refusal"
+                    for part in getattr(output, "content", [])
+                ):
+                    raise RuntimeError("OpenAI refused the request; no content was accepted.")
+            if getattr(parsed, "output_parsed", None) is None:
+                raise RuntimeError("OpenAI returned no structured result.")
+            accepted = True
+            return parsed
+        finally:
+            record = self._read_usage(
+                response,
+                [],
+                set(),
+                time.perf_counter() - started,
+                purpose="response_attempt",
+                policy_name=policy_name,
+            )
+            record.calls[0].update(
+                accepted=accepted,
+                response_id=getattr(response, "id", None),
+                response_status=getattr(response, "status", None),
+            )
+            self.request_usage.append(record)
+            if reservation is not None and self.budget is not None:
+                self.budget.settle(reservation, record)
 
     @staticmethod
     def _read_usage(

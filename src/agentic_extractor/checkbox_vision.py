@@ -3,10 +3,10 @@
 Responsible for: proposing checkbox controls from OpenCV geometry/pixel fill and
 grounding each one to a unique nearby RapidOCR label. Must not: decide whether a
 proposal is safe to auto-apply — that is a three-way agreement across this
-module, an independent Luna crop verification, and OCR label confidence, decided
+module, an independent Sol crop verification, and OCR label confidence, decided
 in `visual_routing.py` / `openai_refiner.py`. This module only supplies one of
 the three signals. Next: `visual_routing.py`, which turns
-`is_automation_eligible_checkbox` candidates into high-detail Luna crops.
+`is_automation_eligible_checkbox` candidates into high-detail Sol crops.
 """
 
 from __future__ import annotations
@@ -147,8 +147,8 @@ def is_automation_eligible_checkbox(page: PageParse, candidate: LocalCheckboxCan
     Stricter than `is_credible_checkbox_candidate`: eligibility additionally
     requires zero recorded risks (ambiguous label, missing label, inside a
     table, indeterminate local state). Credible-but-risky candidates still get
-    a Luna crop review; only risk-free ones can end up auto-accepted, and even
-    then only if Luna's independent read agrees (see `openai_refiner.py`).
+    a Sol crop review; only risk-free ones can end up auto-accepted, and even
+    then only if Sol's independent read agrees (see `openai_refiner.py`).
     """
     return bool(is_credible_checkbox_candidate(page, candidate) and not candidate.risks)
 
@@ -156,7 +156,7 @@ def is_automation_eligible_checkbox(page: PageParse, candidate: LocalCheckboxCan
 def is_credible_checkbox_candidate(page: PageParse, candidate: LocalCheckboxCandidate) -> bool:
     """Return whether local pixels and OCR justify specialized checkbox review.
 
-    This is the "worth sending to Luna" gate, not the "safe to auto-accept"
+    This is the "worth sending to Sol" gate, not the "safe to auto-accept"
     gate — see `is_automation_eligible_checkbox` for the stricter contract.
     """
     return bool(
@@ -171,7 +171,7 @@ def is_credible_checkbox_candidate(page: PageParse, candidate: LocalCheckboxCand
 
 
 def is_visual_checkbox_candidate(page: PageParse, candidate: LocalCheckboxCandidate) -> bool:
-    """Return whether pixels support sending a local shape to Luna for adjudication."""
+    """Return whether pixels support sending a local shape to Sol for adjudication."""
     left, top, right, bottom = candidate.control_bbox
     width = (right - left) * page.width
     height = (bottom - top) * page.height

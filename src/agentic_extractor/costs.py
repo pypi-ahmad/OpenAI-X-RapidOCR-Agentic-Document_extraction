@@ -1,4 +1,4 @@
-"""Central GPT-5.6-luna rates and usage-based cost calculation.
+"""Central gpt-6-sol rates and usage-based cost calculation.
 
 Responsible for: converting provider-reported token usage into a cost
 breakdown using the rates below, and aggregating per-call records for the
@@ -12,15 +12,15 @@ artifacts.py, which folds `rate_assumptions()` into the exported manifest.
 from dataclasses import asdict, dataclass
 from typing import Literal
 
+from agentic_extractor.config import MODEL_NAME as MODEL_NAME
+from agentic_extractor.config import REASONING_EFFORT as REASONING_EFFORT
 from agentic_extractor.models import UsageRecord
 
-MODEL_NAME = "gpt-5.6-luna"
-REASONING_EFFORT = "medium"
 LONG_PROMPT_THRESHOLD = 272_000
-UNCACHED_INPUT_USD_PER_MILLION = 0.20
-CACHED_INPUT_USD_PER_MILLION = 0.02
-CACHE_WRITE_INPUT_USD_PER_MILLION = 0.25
-OUTPUT_USD_PER_MILLION = 1.20
+UNCACHED_INPUT_USD_PER_MILLION = 2.00
+CACHED_INPUT_USD_PER_MILLION = 0.20
+CACHE_WRITE_INPUT_USD_PER_MILLION = 2.50
+OUTPUT_USD_PER_MILLION = 10.00
 
 
 @dataclass(frozen=True, slots=True)
@@ -94,8 +94,8 @@ def calculate_usage_cost(usage: TokenUsage) -> CostBreakdown:
         output_multiplier,
         (
             # "estimate" (not "unavailable") when totals are valid but the
-            # cached/cache-write breakdown wasn't reported: the uncached-rate
-            # cost is a safe upper bound, so it's still shown, just labeled.
+            # cached/cache-write breakdown wasn't reported. This estimate is
+            # not an upper bound: unreported cache writes can cost more.
             "exact"
             if usage.cached_input_tokens is not None and usage.cache_write_input_tokens is not None
             else "estimate"

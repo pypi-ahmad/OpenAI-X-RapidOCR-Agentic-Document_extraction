@@ -6,7 +6,7 @@ over false positives — the thresholds below (fill ratio, aspect ratio, size as
 a fraction of page, vertical text context on both sides) are tuned to avoid
 misflagging tables, figures, or normal underlines as redactions, at the cost
 of missing some real ones. Must not: publish a proposal directly — every
-candidate still requires Luna review before it can appear in output (see
+candidate still requires Sol review before it can appear in output (see
 `pipeline.py`, which calls `detect_page_redactions` and routes candidates
 through `visual_routing.py` for a high-detail crop).
 """
@@ -38,7 +38,7 @@ class _Detection:
 
 
 def detect_page_redactions(page: PageParse) -> list[LocalRedactionCandidate]:
-    """Propose likely black masks; proposals are not publishable without Luna review.
+    """Propose likely black masks; proposals are not publishable without Sol review.
 
     Two independent detectors feed one dedup pass: `_labeled_detections` looks
     for a dark run immediately after a known PII label (patient name, DOB) on

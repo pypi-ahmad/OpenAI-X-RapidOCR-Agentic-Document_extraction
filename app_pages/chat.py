@@ -113,7 +113,7 @@ for message in st.session_state.chat_messages:
             usage = message.get("usage")
             if isinstance(usage, dict):
                 st.caption(
-                    f"Luna calls: {usage.get('call_count', 0)} · "
+                    f"Sol calls: {usage.get('call_count', 0)} · "
                     f"tokens: {usage.get('total_tokens') or 'unavailable'} · "
                     f"cost: "
                     + (

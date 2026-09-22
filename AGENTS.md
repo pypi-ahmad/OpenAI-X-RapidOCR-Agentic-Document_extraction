@@ -4,7 +4,7 @@
 
 - This is a local-machine Streamlit application. The UI runs on TCP port `8841`; the optional
   FastAPI service remains local.
-- A successful Parse always runs RapidOCR first and OpenAI `gpt-5.6-luna` second with
+- A successful Parse always runs RapidOCR first and OpenAI `gpt-6-sol` second with
   `reasoning_effort="medium"`. Never add a single-engine fallback or consent gate.
 - Balanced and High Accuracy both send every selected page image at high detail for visual-control
   coverage. They differ only in compact versus full OCR/layout context.
@@ -18,9 +18,11 @@
 | Task | Start here | Focused check |
 | --- | --- | --- |
 | OCR, CUDA, geometry | `src/agentic_extractor/ocr.py` | `tests/test_local_parse.py` |
-| Luna prompts or context | `src/agentic_extractor/openai_refiner.py` and `src/agentic_extractor/prompts/` | `tests/test_openai_refiner.py tests/test_prompt_resources.py` |
+| Sol prompts or context | `src/agentic_extractor/openai_refiner.py` and `src/agentic_extractor/prompts/` | `tests/test_openai_refiner.py tests/test_prompt_resources.py` |
 | Routing and canonical Parse | `src/agentic_extractor/pipeline.py` and `src/agentic_extractor/parse.py` | `tests/test_hybrid_pipeline.py tests/test_routing.py` |
 | Agentic workflows | `src/agentic_extractor/workflow.py` | `tests/test_workflow.py` |
+| Visual additions and review | `src/agentic_extractor/rich_document.py` and `app_pages/visual_review.py` | `tests/test_rich_document.py tests/test_ui_state.py` |
+| Request billing and validation budget | `src/agentic_extractor/budget.py` and `src/agentic_extractor/openai_refiner.py` | `tests/test_rich_document.py tests/test_openai_refiner.py tests/test_costs.py` |
 | Artifacts and manifests | `src/agentic_extractor/artifacts.py` | `tests/test_local_artifacts.py tests/test_export.py` |
 | Streamlit UI | `streamlit_app.py` and `app_pages/` | `tests/test_ui_state.py` |
 | Local API | `src/agentic_extractor/api.py` | `tests/test_api.py` |
@@ -51,4 +53,4 @@ uv run pytest
 uv run streamlit run app.py --server.port 8841
 ```
 
-See `docs/CONTEXT-ENGINEERING.md` for the Luna context contract and telemetry definitions.
+See `docs/CONTEXT-ENGINEERING.md` for the Sol context contract and telemetry definitions.

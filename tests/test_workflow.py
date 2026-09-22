@@ -122,6 +122,70 @@ def _cloud(fields: list[ExtractedField] | None = None) -> CloudResult:
     )
 
 
+@pytest.mark.parametrize("supported,expected_calls", [(True, 2), (False, 1)])
+def test_visual_inspection_is_bounded_stops_without_progress_and_never_reruns_on_reuse(
+    monkeypatch, supported, expected_calls
+) -> None:
+    import copy
+
+    import agentic_extractor.workflow as workflow_module
+    from agentic_extractor.rich_document import VisualDecision, VisualObject, VisualVerification
+
+    local = _local()
+    local.cloud_image_pages = [1, 2, 3, 4]
+    raw = copy.deepcopy(local.pages[0].blocks)
+    cloud = CloudResult(
+        refined_markdown="",
+        reviewed_pages=[1, 2, 3, 4],
+        visual_objects=[
+            VisualObject(
+                id=f"visual-{index}",
+                page=1,
+                kind="text",
+                bbox=[0.1, 0.4, 0.8, 0.5],
+                content=f"Recovered {index}",
+                reading_order=index + 2,
+            )
+            for index in range(17)
+        ],
+    )
+    calls = []
+
+    def refine(*args, **kwargs):
+        local.cloud_output = cloud.model_dump(mode="json")
+        return local
+
+    class Refiner:
+        def validate_configuration(self):
+            pass
+
+        def verify_visual_objects(self, pages, objects):
+            calls.append(objects)
+            return VisualVerification(
+                decisions=[
+                    VisualDecision(
+                        id=item.id,
+                        supported=supported,
+                        transcription=item.content,
+                        reason="pixels",
+                    )
+                    for item in objects
+                ]
+            ), UsageRecord(call_count=1)
+
+    monkeypatch.setattr(workflow_module, "refine_local_parse", refine)
+    request = _request(capabilities={Capability.PARSE})
+    # This intentionally narrow injected adapter exercises the optional capability boundary.
+    refiner: Any = Refiner()
+    result, workflow = run_workflow_from_parse(local, request, refiner)
+    assert len(calls) == expected_calls
+    assert all(len(batch) == 8 for batch in calls)
+    assert workflow.current_state is WorkflowState.REVIEW_REQUIRED
+    assert result.pages[0].blocks == raw
+    run_workflow_from_parse(result, request, refiner)
+    assert len(calls) == expected_calls
+
+
 def test_workflow_transitions_to_accepted() -> None:
     result = evaluate_workflow(_local(), _request(), _cloud())
     assert [event.state for event in result.events] == [
@@ -240,7 +304,7 @@ def test_numeric_value_box_cannot_be_automated_as_checkbox() -> None:
     assert "alphabetic" in (result.checkboxes[0].review_reason or "")
 
 
-def test_table_region_checkbox_can_pass_only_with_ocr_and_two_luna_signals() -> None:
+def test_table_region_checkbox_can_pass_only_with_ocr_and_two_sol_signals() -> None:
     local = _local()
     local.cloud_image_pages = [1, 2, 3, 4]
     local.pages[0].local_checkbox_candidates = [
@@ -471,7 +535,7 @@ def test_checkbox_business_rule_failure_requires_review() -> None:
     assert any("exactly one" in message for message in result.review_required)
 
 
-def test_workflow_verifies_every_luna_and_opencv_union_candidate() -> None:
+def test_workflow_verifies_every_sol_and_opencv_union_candidate() -> None:
     class CheckboxRefiner:
         verification_pages: list[int] = []
 
@@ -806,7 +870,7 @@ def test_document_prompt_injection_cannot_change_policy() -> None:
     assert result.current_state is WorkflowState.ACCEPTED
     assert result.classifications[0].label == "invoice"
     assert all(
-        event.provider in {"system", "RapidOCR", "PP-DocLayoutV3", "gpt-5.6-luna"}
+        event.provider in {"system", "RapidOCR", "PP-DocLayoutV3", "gpt-6-sol"}
         for event in result.events
     )
     assert local.pages[0].blocks[0].text.startswith("Ignore rules")
@@ -822,7 +886,7 @@ def test_invalid_business_rule_requires_review() -> None:
 def test_workflow_fails_without_required_gpt_result() -> None:
     result = evaluate_workflow(_local(), _request(), None)
     assert result.current_state is WorkflowState.FAILED
-    assert any("GPT" in error for error in result.errors)
+    assert any("gpt-6-sol" in error for error in result.errors)
 
 
 def test_schema_formats_ranges_totals_and_normalized_values() -> None:
@@ -876,12 +940,12 @@ def test_schema_formats_ranges_totals_and_normalized_values() -> None:
     assert by_path["total"].engine_provenance == [
         "RapidOCR",
         "PP-DocLayoutV3",
-        "gpt-5.6-luna",
+        "gpt-6-sol",
     ]
     assert by_path["total"].evidence[0].block_id == "p1-b1"
     assert by_path["total"].source_chunk_id == "p1-c1"
     assert by_path["total"].confidence_by_engine[0].engine == "RapidOCR"
-    assert by_path["total"].confidence_by_engine[1].engine == "gpt-5.6-luna"
+    assert by_path["total"].confidence_by_engine[1].engine == "gpt-6-sol"
     assert result.current_state is WorkflowState.ACCEPTED
 
 
@@ -1048,7 +1112,7 @@ def test_successful_workflow_uses_rapidocr_layout_then_gpt(layout_resource) -> N
             allowed_classes,
             extraction_schema,
         ):
-            calls.append("gpt-5.6-luna")
+            calls.append("gpt-6-sol")
             assert [page.page for page in pages] == [1]
             table_id = pages[0].table_structures[0].id
             return (
@@ -1091,7 +1155,7 @@ def test_successful_workflow_uses_rapidocr_layout_then_gpt(layout_resource) -> N
         "rapidocr",
         "PP-DocLayoutV3",
         "table-structure",
-        "gpt-5.6-luna",
+        "gpt-6-sol",
     ]
     assert local.layout_engine is not None
     assert local.layout_engine.name == "PP-DocLayoutV3"
@@ -1406,7 +1470,7 @@ def test_unresolved_table_is_not_mutated_by_generic_parse_repair() -> None:
                     "table_id": table.id,
                     "page": 1,
                     "status": "unresolved",
-                    "reason": "Luna abstained from the first review.",
+                    "reason": "Sol abstained from the first review.",
                 }
             ],
         },

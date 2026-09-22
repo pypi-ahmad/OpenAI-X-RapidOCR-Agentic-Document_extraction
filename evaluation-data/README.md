@@ -1,7 +1,7 @@
 # Table and checkbox evaluation data
 
-This directory contains reviewable, versioned object labels for the local document corpus. It does
-not treat model output as human ground truth.
+This directory contains versioned object labels for review against the local document corpus.
+Model output is not human ground truth.
 
 ## Current review pack
 

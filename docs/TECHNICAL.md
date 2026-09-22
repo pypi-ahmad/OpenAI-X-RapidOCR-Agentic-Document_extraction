@@ -21,13 +21,22 @@ This document details implementation-level architectural choices, system invaria
 
 The codebase enforces the following invariants through type constraints, validation checks, and unit test assertions:
 
-1. Mandatory three-engine pipeline: Every successful document Parse requires RapidOCR, PP-DocLayoutV3, and OpenAI `gpt-5.6-luna`. The system contains no fallback path to single-engine or offline-only extraction (`RapidOCRSetupError`, `PPDocLayoutSetupError`, and `OpenAIConfigurationError` halt execution immediately).
-2. Immutable raw OCR evidence: `Block` objects produced by RapidOCR are immutable. Refinements from `gpt-5.6-luna` or human reviewers are captured as additive corrections and events; raw OCR coordinates, text, and scores are never overwritten in place.
+1. Mandatory three-engine pipeline: Every successful document Parse requires RapidOCR, PP-DocLayoutV3, and OpenAI `gpt-6-sol`. The system contains no fallback path to single-engine or offline-only extraction (`RapidOCRSetupError`, `PPDocLayoutSetupError`, and `OpenAIConfigurationError` halt execution immediately).
+2. Immutable raw OCR evidence: `Block` objects produced by RapidOCR are immutable. Refinements from `gpt-6-sol` or human reviewers are captured as additive corrections and events; raw OCR coordinates, text, and scores are never overwritten in place.
 3. Untrusted document boundary: Uploaded document content, extracted text, and user-provided schemas are treated as untrusted data. They cannot alter application routing, prompt policies, or tool execution.
 4. Exhaustive High Accuracy review contract: In `High Accuracy` mode, every RapidOCR block with confidence strictly below `0.85` must resolve to an explicit outcome (`accepted`, `rejected`, `abstained`, or `missing`). Any unresolved or rejected block sets the workflow state to `REVIEW_REQUIRED`.
-5. Checkbox automation triple-agreement gate: A checkbox state (`CHECKED` or `UNCHECKED`) is automated only when the OpenCV pixel detector, Luna visual crop review, and unique RapidOCR label grounding (confidence `>=0.85`) are in full agreement. Any disagreement forces `REVIEW_REQUIRED`.
+5. Checkbox automation triple-agreement gate: A checkbox state (`CHECKED` or `UNCHECKED`) is automated only when the OpenCV pixel detector, Sol visual crop review, and unique RapidOCR label grounding (confidence `>=0.85`) are in full agreement. Any disagreement forces `REVIEW_REQUIRED`.
 6. Subprocess contract validation: Data returned by the PP-DocLayoutV3 worker process is treated as an untrusted boundary. Coordinates, confidence scores, and reading orders are parsed into strict models; invalid payloads raise `LayoutContractError`.
 7. Document chat citation isolation: Chat answers must cite valid excerpt IDs supplied in the retrieved context. If citation verification fails or the model returns unsubstantiated content, the response fails closed with an insufficient-evidence message.
+
+## Visual refinement boundary
+
+`rich_document.py` adds missed text, equations, and labelled figure/chart descriptions as
+derived chunks, not raw OCR blocks. Hash-bound crop and human decisions determine whether
+an object renders content, a review placeholder, or nothing after rejection. The workflow
+has at most two repair rounds; visual inspections are limited to eight objects per round.
+The same `gpt-6-sol` model handles every OpenAI operation. Requests have a 16,384-output-token
+cap and no automatic SDK retries. See [Visual review](SOL-UPGRADE.md) for the full contract.
 
 ## Error handling
 
@@ -57,4 +66,5 @@ The application does not use an external database or automated filesystem loggin
 | UI session state | `st.session_state` (`ui_state.py`) | Browser session lifetime. Cleared when the user clicks **Reset session** or closes the browser tab. |
 | API jobs and uploads | `_Job` dictionary in `create_app` (`api.py`) | Process lifetime; jobs expire after 3600 seconds. Expired jobs are removed lazily during subsequent lookups. |
 | Generated artifacts | `LocalArtifacts` in-memory properties (`artifacts.py`) | Generated lazily on demand (PDF, HTML, ZIP) and held in memory. Written to disk only when the user explicitly downloads them. |
-| Evaluation gold datasets | `evaluation-data/` directory | Durable files committed to the repository; human-approved evaluation packs. |
+| Evaluation review packs | `evaluation-data/` directory | Durable tracked drafts; the supplied review pack is pending human approval and cannot be treated as gold data. |
+| Synthetic live-validation output | Explicit output directory passed to `tools/validate_sol_synthetic.py` | Source fixture, artifacts, usage summary, and persisted billing reservations; separate from normal UI/API memory-only processing. |

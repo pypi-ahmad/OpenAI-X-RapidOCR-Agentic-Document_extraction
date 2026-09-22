@@ -1,6 +1,9 @@
 # Agentic document extractor
 
-Agentic document extractor processes PDF, PNG, JPEG, and TIFF files on a local machine. It runs RapidOCR for text and coordinate detection, PP-DocLayoutV3 in an isolated worker process for region and table parsing, and OpenAI `gpt-5.6-luna` (medium reasoning effort) for refinement. The project includes a Streamlit interface, an optional local FastAPI service, schema validation, and artifact export (annotated PDF, coordinate HTML, and ZIP bundles).
+Agentic document extractor processes PDF, PNG, JPEG, and TIFF files on a local machine. It runs RapidOCR for text and coordinate detection, PP-DocLayoutV3 in an isolated worker process for region and table parsing, and OpenAI `gpt-6-sol` (medium reasoning effort) for refinement. The project includes a Streamlit interface, an optional local FastAPI service, schema validation, and artifact export (annotated PDF, coordinate HTML, and ZIP bundles).
+
+GPT-6 Sol is the only OpenAI model. See [visual review and Sol migration](docs/SOL-UPGRADE.md)
+for crop-verified content, two-round repair, pricing, and the opt-in $5 synthetic validation runner.
 
 ## Requirements
 
@@ -9,7 +12,7 @@ Runtime and environment requirements:
 - Operating system: Windows (required). The PP-DocLayoutV3 worker configuration in `tools/pp_doclayout/pyproject.toml` is constrained to `sys_platform == 'win32'`, worker invocation in `src/agentic_extractor/layout.py` calls `.venv/Scripts/python.exe`, and the background service launcher `run_app.cmd` is a Windows batch script.
 - Python version: Python `>=3.13` for the main application (specified in `pyproject.toml` and `.python-version`); `>=3.13,<3.14` for the isolated layout worker environment (`tools/pp_doclayout/pyproject.toml`).
 - Package manager: `uv` is required to resolve dependencies and manage the dual virtual environments.
-- OpenAI API credentials: A valid `OPENAI_API_KEY` environment variable with access to the `gpt-5.6-luna` model.
+- OpenAI API credentials: A valid `OPENAI_API_KEY` environment variable with access to the `gpt-6-sol` model.
 - Hardware and accelerator: Optional NVIDIA GPU with CUDA 12 support. RapidOCR uses `onnxruntime-gpu` with runtime fallback to CPU. The PP-DocLayoutV3 worker environment includes `paddlepaddle-gpu==3.2.0` with CPU fallback.
 
 ## Setup and installation
@@ -89,7 +92,7 @@ The application reads the following environment variables:
 
 | Variable | Required | Default | Purpose |
 |---|---|---|---|
-| `OPENAI_API_KEY` | Yes | Unset | API key for `gpt-5.6-luna` refinement and document chat requests. |
+| `OPENAI_API_KEY` | Yes | Unset | API key for `gpt-6-sol` refinement and document chat requests. |
 | `OPENAI_BASE_URL` | No | Unset | Optional custom base URL for the OpenAI client. |
 | `ADE_OCR_MAX_WORKERS` | No | `4` | Maximum parallel worker processes for CPU-based RapidOCR page processing (integer from `1` to `4`). |
 | `CUDA_PATH` | No | Unset | Optional CUDA installation root directory on Windows; used by `src/agentic_extractor/ocr.py` to register `bin/x64` and `bin` on `PATH` for ONNX Runtime DLL discovery. |
@@ -122,6 +125,7 @@ OpenAI-X-RapidOCR-Agentic-Document_extraction/
 |-- src/agentic_extractor/          Core application package
 |   |-- api.py                      FastAPI service routes and job lifecycle handling
 |   |-- artifacts.py                Artifact generation (Markdown, JSON, PDF, HTML, ZIP)
+|   |-- budget.py                   Optional reservations for budgeted synthetic validation
 |   |-- cache.py                    Bounded process-memory LRU caches for pages, OCR, and layout
 |   |-- capabilities.py             Validation for classification, sectioning, splitting, extraction
 |   |-- checkbox_vision.py          OpenCV checkbox detection and pixel state analysis
@@ -145,17 +149,19 @@ OpenAI-X-RapidOCR-Agentic-Document_extraction/
 |   |-- prompts/                    Packaged versioned Markdown prompt templates
 |   |-- quality.py                  Image quality heuristics and optional preprocessing
 |   |-- redaction_vision.py         Visual redaction mask detection
+|   |-- rich_document.py           Visual proposals, review audits, inspection rasters, and links
 |   |-- schema_input.py             JSON Schema, guided field, and Markdown schema parsers
 |   |-- table_structure.py          Table structure validation, cell grounding, and HTML rendering
 |   |-- timing.py                   Wall-clock stage timing collection and bottleneck ranking
 |   |-- ui_state.py                 Streamlit session state management and document caching
-|   |-- visual_routing.py           Heuristic selection of high-detail image crops for Luna review
+|   |-- visual_routing.py           Heuristic selection of high-detail image crops for Sol review
 |   |-- workflow.py                 End-to-end agent workflow state machine
 |-- tools/                          Auxiliary tools and worker environments
 |   |-- pp_doclayout/               Isolated PaddleX PP-DocLayoutV3 worker and lockfile
 |   |-- run_corpus_validation.py    Multi-document batch evaluation script
 |   |-- run_real_validation.py      Single-document evaluation comparison script
-|-- tests/                          Test suite with 320+ unit and integration tests
+|   |-- validate_sol_synthetic.py   Opt-in synthetic live validation with a per-run budget
+|-- tests/                          Offline unit/integration tests and opt-in live tests
 `-- docs/                           Detailed architectural and operational documentation
 ```
 
@@ -193,7 +199,7 @@ uv run pytest tests/test_prompt_quality_live.py -m live -s
 ## Known limitations
 
 - Windows dependency: The PP-DocLayoutV3 worker runtime is configured only for Windows (`tools/pp_doclayout/pyproject.toml` contains `sys_platform == 'win32'`), and `src/agentic_extractor/layout.py` targets the Windows virtual environment path `.venv/Scripts/python.exe`.
-- Mandatory three-engine processing: RapidOCR, PP-DocLayoutV3, and OpenAI `gpt-5.6-luna` are all required for extraction. There is no offline-only, OCR-only, or single-engine fallback mode.
+- Mandatory three-engine processing: RapidOCR, PP-DocLayoutV3, and OpenAI `gpt-6-sol` are all required for extraction. There is no offline-only, OCR-only, or single-engine fallback mode.
 - In-memory job and cache lifecycle: The FastAPI service and Streamlit app store jobs, upload data, and rendered page caches in process memory. API jobs expire after 3,600 seconds with lazy cleanup on subsequent lookups. Restarting the process discards all jobs and cached data.
 - Upload constraints: Maximum upload size is 50 MiB, maximum page count is 200 pages, and maximum image resolution is 25,000,000 pixels. Multi-frame TIFFs are rejected.
 - Security model: The application and API run on `127.0.0.1` for local use. They include no authentication, authorization, or rate limiting.
@@ -208,7 +214,7 @@ uv run pytest tests/test_prompt_quality_live.py -m live -s
 - [Contributing guide](CONTRIBUTING.md): Standards for code, tests, documentation, and pull requests.
 - [Local API specification](docs/API.md): Endpoint descriptions, request and response contracts, and error structures.
 - [Configuration guide](docs/CONFIGURATION.md): Complete list of application settings and runtime environments.
-- [Context engineering](docs/CONTEXT-ENGINEERING.md): Prompt packaging, visual crop routing, and Luna context contracts.
+- [Context engineering](docs/CONTEXT-ENGINEERING.md): Prompt packaging, visual crop routing, and Sol context contracts.
 - [Development guide](docs/DEVELOPMENT.md): Detailed local development workflows and commands.
 - [Getting started](docs/GETTING-STARTED.md): Step-by-step onboarding walkthrough.
 - [Testing reference](docs/TESTING.md): Test suite organization and test fixture descriptions.

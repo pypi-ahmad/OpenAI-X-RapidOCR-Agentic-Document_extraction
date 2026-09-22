@@ -1,4 +1,4 @@
-<!-- prompt-version: 4 -->
+<!-- prompt-version: 5 -->
 
 # Independent checkbox verification
 
@@ -26,7 +26,7 @@ When discovery evidence and crop pixels conflict, report the crop-supported cont
 with a reason. Use `uncertain` and `NOT_DETERMINABLE` rather than guessing, and keep confidence
 conservative.
 
-The supplied OpenCV, RapidOCR, and earlier Luna values are context for reconciliation only. Your
+The supplied OpenCV, RapidOCR, and earlier Sol values are context for reconciliation only. Your
 returned state must be an independent judgment from the attached crop pixels.
 
 <CHECKBOX_EVIDENCE>
