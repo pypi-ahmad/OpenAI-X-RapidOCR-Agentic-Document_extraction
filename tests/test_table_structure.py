@@ -400,7 +400,7 @@ def test_v3_reading_order_record_preserves_unordered_and_unmatched_evidence() ->
     assert page.reading_order_evidence.status == "ambiguous"
 
 
-def test_luna_table_correction_requires_existing_rapidocr_grounding() -> None:
+def test_sol_table_correction_requires_existing_rapidocr_grounding() -> None:
     from types import SimpleNamespace
 
     page = PageParse(
@@ -454,7 +454,7 @@ def test_luna_table_correction_requires_existing_rapidocr_grounding() -> None:
     assert all(chunk.type != "table" for chunk in page.chunks)
 
 
-def test_luna_cannot_promote_locally_invalid_region_from_two_cell_row_alone() -> None:
+def test_sol_cannot_promote_locally_invalid_region_from_two_cell_row_alone() -> None:
     from types import SimpleNamespace
 
     page = PageParse(
@@ -1055,7 +1055,7 @@ def test_table_repair_preserves_visually_grounded_blank_cells() -> None:
     assert table.markdown == "<table><tr><td>Value</td><td></td></tr></table>"
 
 
-def test_luna_can_reject_a_false_positive_table_without_requesting_review() -> None:
+def test_sol_can_reject_a_false_positive_table_without_requesting_review() -> None:
     from types import SimpleNamespace
 
     page = PageParse(

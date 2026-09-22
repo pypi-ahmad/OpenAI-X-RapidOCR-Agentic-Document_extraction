@@ -12,6 +12,11 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass
+from typing import Literal
+
+type OpenAIModel = Literal["gpt-6-sol"]
+MODEL_NAME: OpenAIModel = "gpt-6-sol"
+REASONING_EFFORT = "medium"
 
 
 @dataclass(frozen=True, slots=True)
@@ -21,8 +26,8 @@ class Settings:
     max_image_pixels: int = 25_000_000
     render_dpi: int = 150
     job_ttl_seconds: int = 3600
-    model: str = "gpt-5.6-luna"
-    reasoning_effort: str = "medium"
+    model: OpenAIModel = MODEL_NAME
+    reasoning_effort: str = REASONING_EFFORT
     cloud_batch_characters: int = 80_000
 
     @property

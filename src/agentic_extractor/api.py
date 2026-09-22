@@ -5,7 +5,7 @@ document parsing, schema extraction, status queries, and artifact downloads,
 backed by `workflow.py` and `pipeline.py`.
 
 Must not: implement extraction logic independently from `workflow.py`/`pipeline.py`,
-bypass the three-engine requirement (RapidOCR -> PP-DocLayoutV3 -> gpt-5.6-luna),
+bypass the three-engine requirement (RapidOCR -> PP-DocLayoutV3 -> gpt-6-sol),
 expose secrets or raw credentials, or persist jobs across process restarts
 (uses in-memory storage with lazy TTL eviction).
 
@@ -22,7 +22,7 @@ import json
 import secrets
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
@@ -32,6 +32,7 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from agentic_extractor.artifacts import LocalArtifacts, build_local_artifacts
 from agentic_extractor.config import SETTINGS
+from agentic_extractor.costs import aggregate_usage
 from agentic_extractor.layout import (
     PPDocLayoutResource,
     create_pp_doclayout_engine,
@@ -42,6 +43,7 @@ from agentic_extractor.models import (
     CheckboxRecord,
     DocumentRequest,
     ProcessingMode,
+    UsageRecord,
 )
 from agentic_extractor.ocr import LocalParseResult, OCRResource, create_rapidocr_engine
 from agentic_extractor.openai_refiner import OpenAIConfigurationError, OpenAIRefiner
@@ -128,6 +130,7 @@ class JobCreated(BaseModel):
 
 
 class JobStatus(BaseModel):
+    usage: UsageRecord | None = None
     job_id: str
     state: JobState
     warnings: list[str] = Field(default_factory=list)
@@ -144,6 +147,9 @@ class ParseResultPayload(BaseModel):
     markdown: str
     metadata: dict[str, Any]
     structure: dict[str, Any]
+    visual_objects: list[dict[str, Any]] = Field(default_factory=list)
+    visual_audits: list[dict[str, Any]] = Field(default_factory=list)
+    document_links: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ExtractionResult(BaseModel):
@@ -180,6 +186,7 @@ class _Job:
     workflow: AgentWorkflowResult | None = None
     artifacts: LocalArtifacts | None = None
     error: ApiError | None = None
+    failed_usage: list[UsageRecord] = field(default_factory=list)
 
 
 def create_app(
@@ -193,7 +200,7 @@ def create_app(
         title="Agentic document extractor API",
         version="1.0.0",
         description=(
-            "Local-only API over the canonical RapidOCR, PP-DocLayoutV3, and GPT-5.6-luna pipeline."
+            "Local-only API over the canonical RapidOCR, PP-DocLayoutV3, and gpt-6-sol pipeline."
         ),
     )
     jobs: dict[str, _Job] = {}
@@ -441,6 +448,7 @@ def _run(
     initialization_timings: dict[str, float],
 ) -> None:
     job.state = JobState.PROCESSING
+    ledger_start = len(getattr(refiner, "request_usage", []))
     try:
         refiner.validate_configuration()
         local, workflow = run_agent_workflow(
@@ -460,6 +468,7 @@ def _run(
         job.error = None
     except Exception as exc:
         job.state = JobState.FAILED
+        job.failed_usage.extend(getattr(refiner, "request_usage", [])[ledger_start:])
         job.error = ApiError(
             code="processing_failed",
             message=f"{type(exc).__name__}: {exc}",
@@ -470,6 +479,7 @@ def _run(
 
 def _run_from_parse(job: _Job, request: DocumentRequest, refiner: Refiner) -> None:
     job.state = JobState.PROCESSING
+    ledger_start = len(getattr(refiner, "request_usage", []))
     try:
         if job.local is None:
             raise ValueError("Canonical Parse result is not available.")
@@ -486,6 +496,7 @@ def _run_from_parse(job: _Job, request: DocumentRequest, refiner: Refiner) -> No
         job.error = None
     except Exception as exc:
         job.state = JobState.FAILED
+        job.failed_usage.extend(getattr(refiner, "request_usage", [])[ledger_start:])
         job.error = ApiError(
             code="extraction_failed",
             message=f"{type(exc).__name__}: {exc}",
@@ -547,6 +558,7 @@ def _status(job_id: str, jobs: dict[str, _Job], *, now: float) -> JobStatus:
     local, workflow = job.local, job.workflow
     result = json.loads(job.artifacts.parse_result) if job.artifacts else None
     return JobStatus(
+        usage=aggregate_usage(([local.usage] if local else []) + job.failed_usage),
         job_id=job_id,
         state=job.state,
         warnings=(local.warnings if local else ([job.error.message] if job.error else [])),

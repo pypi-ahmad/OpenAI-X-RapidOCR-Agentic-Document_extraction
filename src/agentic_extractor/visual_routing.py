@@ -1,13 +1,13 @@
-"""Deterministic local routing for high-detail Luna image regions.
+"""Deterministic local routing for high-detail Sol image regions.
 
 Responsible for: deciding, from local evidence alone (OCR confidence, risky
 text patterns, checkbox/redaction candidates, complex layout regions, page
-quality), which page regions get a high-detail crop sent to Luna versus a
+quality), which page regions get a high-detail crop sent to Sol versus a
 low-detail page overview. Must not: decide checkbox/table acceptance itself —
-it only decides what Luna gets to look at; acceptance happens in
+it only decides what Sol gets to look at; acceptance happens in
 `openai_refiner.py` and the merge logic in `pipeline.py`. Next:
 `openai_refiner.py`, which turns these regions into actual image content in
-the Luna request.
+the Sol request.
 """
 
 from __future__ import annotations
@@ -48,7 +48,7 @@ class _Candidate:
 
 
 def block_requires_gpt_review(block: Any) -> bool:
-    """Flag low-confidence or character-sensitive OCR for mandatory Luna review."""
+    """Flag low-confidence or character-sensitive OCR for mandatory Sol review."""
     return bool(
         (block.ocr_score is not None and block.ocr_score < LOW_CONFIDENCE_THRESHOLD)
         or _HIGH_RISK_OCR_PATTERN.search(block.text)
@@ -295,7 +295,7 @@ def _region(page: int, ordinal: int, candidate: _Candidate) -> VisualReviewRegio
 
 def _pad(bbox: list[float], amount: float = 0.02) -> list[float]:
     # Context padding: expand crops by 2% normalized page margin (clamped [0, 1])
-    # so Luna sees immediate surrounding context for characters/controls.
+    # so Sol sees immediate surrounding context for characters/controls.
     return [
         max(0.0, bbox[0] - amount),
         max(0.0, bbox[1] - amount),

@@ -17,19 +17,19 @@ def test_cost_uses_supplied_uncached_cached_and_output_formula() -> None:
         )
     )
     assert cost.uncached_input_tokens == 65_000
-    assert cost.input_cost_usd == 0.016
-    assert cost.output_cost_usd == 0.012
-    assert cost.total_cost_usd == 0.028
+    assert cost.input_cost_usd == 0.16
+    assert cost.output_cost_usd == 0.10
+    assert cost.total_cost_usd == 0.26
     assert cost.status == "exact"
 
 
 def test_rate_assumptions_include_separate_cache_write_price() -> None:
     rates = rate_assumptions()["usd_per_million_tokens"]
     assert rates == {
-        "uncached_input": 0.20,
-        "cached_input": 0.02,
-        "cache_write_input": 0.25,
-        "output": 1.20,
+        "uncached_input": 2.00,
+        "cached_input": 0.20,
+        "cache_write_input": 2.50,
+        "output": 10.00,
     }
 
 
@@ -44,7 +44,7 @@ def test_long_prompt_multiplier_applies_to_whole_request() -> None:
     )
     assert cost.input_multiplier == 2
     assert cost.output_multiplier == 1.5
-    assert cost.total_cost_usd == 0.138
+    assert cost.total_cost_usd == 1.35
 
 
 def test_missing_cached_usage_is_estimated_and_missing_totals_are_unavailable() -> None:

@@ -65,7 +65,7 @@ class LocalCheckboxCandidate(BaseModel):
 
 
 class LocalRedactionCandidate(BaseModel):
-    """Pixel-grounded opaque-mask proposal requiring Luna confirmation."""
+    """Pixel-grounded opaque-mask proposal requiring Sol confirmation."""
 
     model_config = ConfigDict(extra="forbid")
     id: str
@@ -81,7 +81,7 @@ class LocalRedactionCandidate(BaseModel):
 
 
 class VisualReviewRegion(BaseModel):
-    """A locally selected source-image region requiring high-detail Luna review."""
+    """A locally selected source-image region requiring high-detail Sol review."""
 
     model_config = ConfigDict(extra="forbid")
     id: str
@@ -195,7 +195,7 @@ class CheckboxRecord(BaseModel):
     verification_reason: str | None = None
     decision_status: Literal["automated", "review_required", "user_verified"]
     review_reason: str | None = None
-    engine_provenance: list[str] = Field(default_factory=lambda: ["RapidOCR", "gpt-5.6-luna"])
+    engine_provenance: list[str] = Field(default_factory=lambda: ["RapidOCR", "gpt-6-sol"])
     crop_ref: str | None = None
     local_vision_state: CheckboxState | None = None
     local_vision_score: float | None = Field(default=None, ge=0, le=1)
@@ -248,7 +248,7 @@ class RefinementRecord(BaseModel):
     proposed_reading_order: int | None = Field(default=None, ge=1)
     evidence: list[EvidenceRef] = Field(default_factory=list)
     reason: str | None = None
-    provider: Literal["gpt-5.6-luna"] = "gpt-5.6-luna"
+    provider: Literal["gpt-6-sol"] = "gpt-6-sol"
 
 
 class UsageRecord(BaseModel):

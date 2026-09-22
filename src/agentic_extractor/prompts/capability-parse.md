@@ -1,6 +1,17 @@
-<!-- prompt-version: 16 -->
+<!-- prompt-version: 17 -->
 
 ## Parse and refine
+
+- Inspect each full-page image for content absent from OCR. Return those additions separately
+  in `visual_objects`: missed text, equations (LaTeX without display delimiters), and figure or
+  chart descriptions. Cite a tight normalized positive-area `bbox`, page and reading order.
+  Do not duplicate text already represented by OCR; correct existing blocks via refinements.
+  Descriptions must be literal visual descriptions, never inferred values, identities or causes.
+  Do not reconstruct redacted content or signatures. Use temporary unique IDs; the application
+  assigns stable IDs and independently verifies crops before publishing additions.
+- Return `document_links` only for visibly supported continuations, captions, or parent/child
+  relationships. Refer to semantic region IDs or visual-object IDs. Keep page fragments intact;
+  do not duplicate continuation text. Unknown relationships must be omitted, not guessed.
 
 - Compare OCR with available visual evidence for text, headings, paragraphs, list items, table
   rows, key-value blocks, and reading order.

@@ -44,6 +44,8 @@ class ParseChunk:
     source_block_ids: list[str]
     bbox: list[float] | None
     raw_scores: list[float | None]
+    provenance: str = "rapidocr"
+    verification: str | None = None
 
 
 @dataclass(slots=True)
@@ -73,6 +75,8 @@ class PageParse:
     reading_order_evidence: ReadingOrderEvidence | None = None
     table_structures: list[TableStructureEvidence] = field(default_factory=list)
     table_raw_evidence: list[dict[str, object]] = field(default_factory=list)
+    visual_audits: list[dict] = field(default_factory=list)
+    inspection_image_bytes: bytes | None = None
 
     @property
     def markdown(self) -> str:

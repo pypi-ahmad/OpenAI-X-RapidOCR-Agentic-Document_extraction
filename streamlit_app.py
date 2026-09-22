@@ -225,7 +225,7 @@ st.session_state.setdefault("json_schema_upload_text", "")
 st.session_state.setdefault("markdown_schema_upload_text", "")
 
 st.title("Agentic document extraction")
-st.caption("Local RapidOCR and PP-DocLayoutV3 followed by required GPT-5.6-luna refinement")
+st.caption("Local RapidOCR and PP-DocLayoutV3 followed by required gpt-6-sol refinement")
 
 document: IngestedDocument | None = None
 validation_error: str | None = None
@@ -578,6 +578,8 @@ else:
 
 if process_clicked and document:
     progress = st.progress(0, text="0% — Preparing extraction")
+    cloud_refiner = None
+    usage_start = 0
     try:
         progress.progress(5, text="5% — Validating selected pages")
         selected = set(validate_page_range(int(start_page), int(end_page), document.page_count))
@@ -587,6 +589,7 @@ if process_clicked and document:
             st.write("Validating OpenAI configuration without sending document content")
             configuration_started = time.perf_counter()
             cloud_refiner = get_openai_refiner()
+            usage_start = len(cloud_refiner.request_usage)
             cloud_refiner.validate_configuration()
             initialization_timings = {
                 "configuration_seconds": time.perf_counter() - configuration_started
@@ -607,7 +610,7 @@ if process_clicked and document:
             )
             st.write(
                 "Running RapidOCR, PP-DocLayoutV3 reading order and table structure, "
-                "then required GPT-5.6-luna refinement"
+                "then required gpt-6-sol refinement"
             )
             progress.progress(35, text="35% — Running OCR, reading order, and table structure")
             rapidocr_initialization_started = time.perf_counter()
@@ -667,6 +670,14 @@ if process_clicked and document:
     except Exception as exc:
         set_state(AppState.FAILED)
         progress.progress(100, text="100% — Failed")
+        if failed_calls := getattr(cloud_refiner, "request_usage", [])[usage_start:]:
+            st.session_state.usage_history.append(
+                {
+                    "mode": "Failed attempt",
+                    "usage": aggregate_usage(failed_calls).model_dump(mode="json"),
+                    "rapidocr_seconds": None,
+                }
+            )
         st.error(f"Processing failed: {type(exc).__name__}: {exc}")
 
 if result := st.session_state.result:
@@ -756,6 +767,11 @@ if result := st.session_state.result:
     )
 
 if workflow := st.session_state.workflow:
+    from app_pages.visual_review import render_visual_review
+
+    if render_visual_review(result, workflow, include_atomic_grounding):
+        remember_processed_markdown(result, st.session_state.app_state.value)
+        st.rerun()
     st.subheader(":material/account_tree: Agent Workflow")
     st.badge(
         workflow.current_state.value,
@@ -881,7 +897,7 @@ if workflow := st.session_state.workflow:
     )
 
 st.subheader(":material/payments: Usage & Cost")
-st.caption("Per 1M tokens: input $0.20 · cached input $0.02 · cache writes $0.25 · output $1.20")
+st.caption("Per 1M tokens: input $2.00 · cached input $0.20 · cache writes $2.50 · output $10.00")
 current = st.session_state.result
 history = [
     entry
@@ -889,7 +905,15 @@ history = [
     if isinstance(entry, dict) and isinstance(entry.get("usage"), dict)
 ]
 if current is None or not history:
-    st.caption("No run usage recorded in this session.")
+    if history:
+        st.caption("Failed-attempt usage; missing provider counts remain unavailable.")
+        st.json(
+            aggregate_usage(
+                [UsageRecord.model_validate(entry["usage"]) for entry in history]
+            ).model_dump(mode="json")
+        )
+    else:
+        st.caption("No run usage recorded in this session.")
 else:
     usage = current.usage
     session_usage = aggregate_usage(
@@ -926,7 +950,7 @@ else:
     cost_row.metric("RapidOCR API cost", "$0.00")
     cost_row.metric("PP-DocLayoutV3 API cost", "$0.00")
     cost_row.metric("Table structure API cost", "$0.00")
-    st.caption("Model: gpt-5.6-luna · reasoning effort: medium")
+    st.caption("Model: gpt-6-sol · reasoning effort: medium")
     st.caption(
         f"RapidOCR processing: {current.timings.get('ocr_seconds', 0):.3f}s · "
         f"session total: {session_ocr_seconds:.3f}s · hardware cost: unavailable"

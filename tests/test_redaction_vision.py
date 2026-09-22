@@ -116,7 +116,7 @@ class _ConfirmingRefiner:
         )
 
 
-def test_only_luna_confirmed_masks_become_grounded_canonical_blocks() -> None:
+def test_only_sol_confirmed_masks_become_grounded_canonical_blocks() -> None:
     page = _page()
     local = LocalParseResult(
         document_metadata={},

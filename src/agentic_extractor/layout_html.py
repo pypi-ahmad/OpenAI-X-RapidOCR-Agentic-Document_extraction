@@ -130,11 +130,40 @@ def _page_html(
             accepted.get(block.id, block.text),
             "refined",
             order,
-            "gpt-5.6-luna + rapidocr" if block.id in accepted else block.source,
+            "gpt-6-sol + rapidocr" if block.id in accepted else block.source,
         )
         for order, block in enumerate(blocks, 1)
     )
     geometry = _geometry(page, checkboxes, accepted_table_ids)
+    for chunk in page.chunks:
+        if chunk.provenance != "gpt-visual":
+            continue
+        # A derived display block only; immutable page.blocks is not extended.
+        derived = Block(
+            id=chunk.id,
+            page=page.page,
+            type=chunk.type,
+            text=chunk.text,
+            bbox=chunk.bbox,
+            source="gpt-visual",
+        )
+        refined += _text_run(
+            page,
+            derived,
+            chunk.text,
+            "refined",
+            chunk.reading_order,
+            f"gpt-6-sol · {chunk.verification}",
+        )
+        geometry += _polygon(
+            _bbox_polygon(chunk.bbox, page.width, page.height),
+            "region block-region",
+            {
+                "source-id": chunk.id,
+                "region-type": chunk.type,
+                "verification": str(chunk.verification),
+            },
+        )
     ratio = page.height / page.width * 100 if page.width else 100
     return (
         f'<section class="page-shell" data-source-page="{page.page}" data-width="{page.width}" '
@@ -272,7 +301,7 @@ def _geometry(page: PageParse, checkboxes: list[Any], accepted_table_ids: set[st
 
 
 def _accepted_table_ids(metadata: dict[str, Any]) -> set[str] | None:
-    """Return audited table IDs, or None when no Luna audit exists yet."""
+    """Return audited table IDs, or None when no Sol audit exists yet."""
     audits = metadata.get("table_reviews")
     if not isinstance(audits, list):
         return None

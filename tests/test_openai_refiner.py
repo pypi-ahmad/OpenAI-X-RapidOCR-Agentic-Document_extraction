@@ -111,7 +111,7 @@ def test_markdown_workflow_uses_text_grounding_without_page_images() -> None:
     assert context["block_count"] == 1
     assert context["compact_pages"] == []
     assert context["full_context_pages"] == []
-    assert responses.kwargs["model"] == "gpt-5.6-luna"
+    assert responses.kwargs["model"] == "gpt-6-sol"
     assert responses.kwargs["reasoning"] == {"effort": "medium"}
     assert {item["name"] for item in usage.calls[0]["prompts"]} == {
         "policy.md",
@@ -138,9 +138,9 @@ def test_wrapper_enforces_model_reasoning_privacy_and_no_tools() -> None:
     assert usage.reasoning_tokens == 1
     assert usage.call_count == 1
     assert usage.cost_status == "exact"
-    assert usage.input_cost_usd == pytest.approx(0.00000067)
-    assert usage.output_cost_usd == 0.0000024
-    assert usage.total_cost_usd == pytest.approx(0.00000307)
+    assert usage.input_cost_usd == pytest.approx(0.0000067)
+    assert usage.output_cost_usd == pytest.approx(0.00002)
+    assert usage.total_cost_usd == pytest.approx(0.0000267)
     assert usage.calls[0]["pages"] == [1]
     assert usage.calls[0]["image_pages"] == [1]
     assert {item["name"] for item in usage.calls[0]["prompts"]} == {
@@ -150,7 +150,7 @@ def test_wrapper_enforces_model_reasoning_privacy_and_no_tools() -> None:
         "page-context-compact.md",
         "capability-parse.md",
     }
-    assert usage.calls[0]["model"] == "gpt-5.6-luna"
+    assert usage.calls[0]["model"] == "gpt-6-sol"
     assert usage.calls[0]["reasoning_effort"] == "medium"
     assert usage.calls[0]["context"]["kind"] == "parse"
     assert usage.calls[0]["context"]["compact_pages"] == [1]
@@ -162,7 +162,7 @@ def test_wrapper_enforces_model_reasoning_privacy_and_no_tools() -> None:
         "output_tokens": 2.0,
         "total_tokens": 6.0,
     }
-    assert responses.kwargs["model"] == "gpt-5.6-luna"
+    assert responses.kwargs["model"] == "gpt-6-sol"
     assert responses.kwargs["reasoning"] == {"effort": "medium"}
     assert responses.kwargs["store"] is False
     assert responses.kwargs["tools"] == []
@@ -222,7 +222,7 @@ def test_refine_runs_bounded_table_review_with_exact_candidate_coverage() -> Non
     assert [review.table_id for review in result.table_reviews] == ["p1-l1-table"]
     assert usage.call_count == 2
     table_call = responses.calls[1]
-    assert table_call["model"] == "gpt-5.6-luna"
+    assert table_call["model"] == "gpt-6-sol"
     assert table_call["reasoning"] == {"effort": "medium"}
     assert table_call["text_format"] is TableReviewResult
     assert [item["type"] for item in table_call["input"][0]["content"]] == [
@@ -430,7 +430,7 @@ def test_configuration_preflight_is_actionable_and_cached() -> None:
         calls = 0
 
         def retrieve(self, model: str):
-            assert model == "gpt-5.6-luna"
+            assert model == "gpt-6-sol"
             self.calls += 1
 
     models = Models()
@@ -665,7 +665,7 @@ def test_prompt_groups_ocr_blocks_into_ordered_local_semantic_regions(
     assert packet.metrics["semantic_region_count"] == 2
 
 
-def test_prompt_includes_only_credible_checkbox_candidates_for_luna_adjudication() -> None:
+def test_prompt_includes_only_credible_checkbox_candidates_for_sol_adjudication() -> None:
     page = PageParse(
         page=1,
         width=100,
@@ -978,11 +978,11 @@ def test_compact_pages_share_a_batch_while_full_review_pages_are_isolated() -> N
     assert [call["context"]["batch_index"] for call in usage.calls] == [1, 2]
     assert all(call["context"]["batch_count"] == 2 for call in usage.calls)
     assert result.reviewed_pages == [1, 2, 3]
-    assert all(call["model"] == "gpt-5.6-luna" for call in usage.calls)
+    assert all(call["model"] == "gpt-6-sol" for call in usage.calls)
     assert all(call["reasoning_effort"] == "medium" for call in usage.calls)
 
 
-def test_eleven_compact_pages_use_one_luna_request() -> None:
+def test_eleven_compact_pages_use_one_sol_request() -> None:
     pages = [
         PageParse(
             page=number,
@@ -1021,7 +1021,7 @@ def test_failed_compact_batch_identifies_its_pages() -> None:
         )
 
 
-def test_truncated_structured_json_is_retried_once() -> None:
+def test_truncated_structured_json_is_not_silently_retried() -> None:
     class TruncatedThenValidResponses(FakeResponses):
         def parse(self, **kwargs):
             self.calls.append(kwargs)
@@ -1031,16 +1031,59 @@ def test_truncated_structured_json_is_retried_once() -> None:
 
     responses = TruncatedThenValidResponses()
 
-    result, _ = OpenAIRefiner(client=SimpleNamespace(responses=responses)).refine(
-        [PageParse(page=1, width=10, height=10, image_bytes=_jpeg())],
-        set(),
-        {"Parse"},
-        [],
-        None,
-    )
+    refiner = OpenAIRefiner(client=SimpleNamespace(responses=responses))
+    with pytest.raises(RuntimeError, match="failed"):
+        refiner.refine(
+            [PageParse(page=1, width=10, height=10, image_bytes=_jpeg())],
+            set(),
+            {"Parse"},
+            [],
+            None,
+        )
+    assert len(responses.calls) == 1
+    assert refiner.request_usage[0].cost_status == "unavailable"
 
-    assert result.reviewed_pages == [1]
-    assert len(responses.calls) == 3
+
+@pytest.mark.parametrize("failure", ["invalid_json", "refusal", "incomplete"])
+def test_failed_responses_keep_reported_usage_without_hidden_retries(failure) -> None:
+    calls = []
+
+    def parse(**kwargs):
+        calls.append(kwargs)
+        payload = {
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 20,
+                "total_tokens": 120,
+                "input_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 0},
+            }
+        }
+
+        def decode():
+            if failure == "invalid_json":
+                return CloudResult.model_validate_json("{")
+            return SimpleNamespace(
+                status="incomplete" if failure == "incomplete" else "completed",
+                output_parsed=CloudResult(refined_markdown="", reviewed_pages=[]),
+                output=[SimpleNamespace(content=[SimpleNamespace(type="refusal")])]
+                if failure == "refusal"
+                else [],
+            )
+
+        return SimpleNamespace(
+            http_response=SimpleNamespace(text=json.dumps(payload)), parse=decode
+        )
+
+    refiner = OpenAIRefiner(
+        client=SimpleNamespace(
+            responses=SimpleNamespace(with_raw_response=SimpleNamespace(parse=parse))
+        )
+    )
+    with pytest.raises((RuntimeError, ValueError)):
+        refiner._request([])
+    assert len(calls) == 1
+    assert refiner.request_usage[0].input_tokens == 100
+    assert refiner.request_usage[0].cost_status == "exact"
 
 
 def test_repair_request_is_structured_bounded_and_uses_same_model_policy() -> None:
@@ -1066,7 +1109,7 @@ def test_repair_request_is_structured_bounded_and_uses_same_model_policy() -> No
 
     assert result.reviewed_pages == [1]
     assert usage.call_count == 1
-    assert responses.kwargs["model"] == "gpt-5.6-luna"
+    assert responses.kwargs["model"] == "gpt-6-sol"
     assert responses.kwargs["reasoning"] == {"effort": "medium"}
     assert "# Bounded repair" in responses.kwargs["input"][0]["content"][0]["text"]
     images = [
@@ -1171,7 +1214,7 @@ def test_risky_checkbox_verification_uses_one_bounded_medium_effort_call() -> No
 
     assert result.verifications[0].id == "p1-c1"
     assert result.verifications[0].control_status == "checkbox"
-    assert responses.kwargs["model"] == "gpt-5.6-luna"
+    assert responses.kwargs["model"] == "gpt-6-sol"
     assert responses.kwargs["reasoning"] == {"effort": "medium"}
     assert (
         sum(item["type"] == "input_image" for item in responses.kwargs["input"][0]["content"]) == 1

@@ -105,7 +105,7 @@ _MIN_CHECKBOX_VERIFICATION_CONFIDENCE = 0.90
 class WorkflowEvent(BaseModel):
     state: WorkflowState
     action: str
-    provider: Literal["system", "RapidOCR", "PP-DocLayoutV3", "gpt-5.6-luna"] = "system"
+    provider: Literal["system", "RapidOCR", "PP-DocLayoutV3", "gpt-6-sol"] = "system"
     reason: str
     elapsed_seconds: float = 0
     token_impact: int = 0
@@ -146,7 +146,7 @@ class GroundedSplit(BaseModel):
 
 
 class ConfidenceRecord(BaseModel):
-    engine: Literal["RapidOCR", "gpt-5.6-luna"]
+    engine: Literal["RapidOCR", "gpt-6-sol"]
     value: float | None = None
     kind: Literal["recognition", "model_asserted"]
     calibrated: bool = False
@@ -313,15 +313,18 @@ def run_workflow_from_parse(
             "configuration_seconds",
             time.perf_counter() - configuration_started,
         )
+    reused_parse = bool(local.cloud_output)
+    ledger_start = len(getattr(cloud_refiner, "request_usage", []))
+    prior_usage = local.usage if local.usage.call_count else None
     if local.cloud_output and request.capabilities - {Capability.PARSE}:
         local, _ = refine_markdown_workflows(local, request, cloud_refiner)
     elif not local.cloud_output:
-        local = refine_local_parse(local, request, cloud_refiner)
+        local = refine_local_parse(local, request, cloud_refiner, defer_markdown_workflows=True)
     cloud = CloudResult.model_validate(local.cloud_output) if local.cloud_output else None
     if cloud is not None:
-        # Only send a checkbox candidate for the paid Luna crop-verification call
+        # Only send a checkbox candidate for the paid Sol crop-verification call
         # if the *page* already has independent local (OpenCV+OCR) corroboration;
-        # this bounds verification cost and keeps ungrounded Luna-only guesses out
+        # this bounds verification cost and keeps ungrounded Sol-only guesses out
         # of the crop-review request entirely (they still surface as review items
         # via `_checkbox_risks`, they just never reach `verify_checkboxes`).
         credible_pages = {
@@ -341,7 +344,7 @@ def run_workflow_from_parse(
         if candidates and callable(verify):
             verification_started = time.perf_counter()
             page_map = {page.page: page for page in local.pages}
-            # One bounded Luna call per page (not one big batch): keeps each crop-
+            # One bounded Sol call per page (not one big batch): keeps each crop-
             # verification request small, and a single page's failure (caught below)
             # only removes that page's checkboxes from automation - it does not
             # abort verification for the rest of the document.
@@ -375,112 +378,153 @@ def run_workflow_from_parse(
                 time.perf_counter() - verification_started,
             )
     workflow = evaluate_workflow(local, request, cloud)
-    retryable = [
-        item
-        for item in workflow.review_items
-        if item.retryable and item.stage != "checkbox" and item.source_ids
-    ]
-    optional_capabilities = {capability.value for capability in request.capabilities} - {"Parse"}
-    markdown_repair = getattr(cloud_refiner, "refine_markdown", None)
-    repair = (
-        markdown_repair
-        if optional_capabilities and callable(markdown_repair)
-        else getattr(cloud_refiner, "repair", None)
-    )
-    repair_scope = (
-        _object_repair_scope(local, request, cloud, retryable) if cloud is not None else None
-    )
-    if (
-        workflow.current_state is WorkflowState.REVIEW_REQUIRED
-        and retryable
-        and cloud is not None
-        and callable(repair)
-        and repair_scope is not None
-    ):
-        repair_started = time.perf_counter()
-        repair_markdown, repair_pages, repair_capabilities, repair_schema, repair_prior = (
-            repair_scope
+    inspected: set[str] = set()
+    downstream_pending = not reused_parse and bool(request.capabilities - {Capability.PARSE})
+    if cloud is not None and not reused_parse and cloud.visual_objects:
+        from agentic_extractor.rich_document import prepare_inspection_images
+
+        prepare_inspection_images(local.pages, request.file_bytes, cloud.visual_objects)
+    for repair_round in range(1, 3):
+        before = tuple(workflow.review_required)
+        if cloud is not None and not reused_parse:
+            _verify_visual_round(local, cloud, cloud_refiner, inspected, repair_round)
+            local.markdown = render_result_markdown(local)
+            workflow = evaluate_workflow(local, request, cloud)
+            if (
+                repair_round == 1
+                and tuple(workflow.review_required) != before
+                and any(item.id not in inspected for item in cloud.visual_objects)
+            ):
+                continue
+        if downstream_pending and cloud is not None:
+            local, cloud = refine_markdown_workflows(local, request, cloud_refiner, cloud)
+            workflow = evaluate_workflow(local, request, cloud)
+            downstream_pending = False
+        retryable = [
+            item
+            for item in workflow.review_items
+            if item.retryable and item.stage != "checkbox" and item.source_ids
+        ]
+        optional_capabilities = {capability.value for capability in request.capabilities} - {
+            "Parse"
+        }
+        markdown_repair = getattr(cloud_refiner, "refine_markdown", None)
+        repair = (
+            markdown_repair
+            if optional_capabilities and callable(markdown_repair)
+            else getattr(cloud_refiner, "repair", None)
         )
-        try:
-            issues = [item.model_dump(mode="json") for item in retryable]
-            if repair is markdown_repair:
-                repaired, repair_usage = repair(
-                    repair_markdown,
-                    repair_pages,
-                    repair_capabilities,
-                    request.allowed_classes,
-                    repair_schema,
-                    issues=issues,
-                    prior=repair_prior,
-                )
-            else:
-                image_pages = {page.page for page in repair_pages if page.visual_review_regions}
-                repaired, repair_usage = repair(
-                    repair_pages,
-                    image_pages,
-                    repair_capabilities,
-                    request.allowed_classes,
-                    repair_schema,
-                    issues,
-                    repair_prior,
-                )
-            merged = _merge_repair(cloud, repaired, request.capabilities, repair_items=retryable)
-            local.usage = aggregate_usage([local.usage, repair_usage])
-            local.cloud_output = merged.model_dump(mode="json")
-            local.cloud_attempts.append(
-                {
-                    "attempt": len(local.cloud_attempts) + 1,
-                    "purpose": "repair",
-                    "output": local.cloud_output,
-                }
-            )
-            (
-                local.markdown,
-                local.refinements,
-                refinement_warnings,
-                table_reviews,
-            ) = _apply_refinements(local.pages, merged, set(local.cloud_image_pages))
-            local.document_metadata["table_reviews"] = table_reviews
-            local.warnings.extend(refinement_warnings)
-            repaired_workflow = evaluate_workflow(local, request, merged)
-            repaired_workflow.events = [
-                *workflow.events,
-                WorkflowEvent(
-                    state=WorkflowState.REVIEW_REQUIRED,
-                    action="request_deeper_gpt_refinement",
-                    provider=MODEL_NAME,
-                    reason=f"One object-specific repair targeted {len(retryable)} object(s).",
-                    token_impact=repair_usage.total_tokens or 0,
-                    cost_impact_usd=repair_usage.total_cost_usd,
-                ),
-                *repaired_workflow.events,
-            ]
-            workflow = repaired_workflow
-        except Exception as exc:
-            message = f"Bounded GPT repair failed; human review is required: {type(exc).__name__}."
-            workflow.review_required.append(message)
-            workflow.review_items.append(
-                ReviewItem(
-                    id=f"review-{len(workflow.review_items) + 1}",
-                    stage="validate",
-                    code="REPAIR_FAILED",
-                    message=message,
-                    retryable=False,
-                    attempt=2,
-                )
-            )
-            workflow.events.append(
-                WorkflowEvent(
-                    state=WorkflowState.REVIEW_REQUIRED,
-                    action="deeper_gpt_refinement_failed",
-                    provider=MODEL_NAME,
-                    reason=message,
-                )
-            )
-        record_stage_timing(
-            local.timings, "object_repair_seconds", time.perf_counter() - repair_started
+        repair_scope = (
+            _object_repair_scope(local, request, cloud, retryable) if cloud is not None else None
         )
+        if (
+            workflow.current_state is WorkflowState.REVIEW_REQUIRED
+            and retryable
+            and cloud is not None
+            and callable(repair)
+            and repair_scope is not None
+        ):
+            repair_started = time.perf_counter()
+            repair_markdown, repair_pages, repair_capabilities, repair_schema, repair_prior = (
+                repair_scope
+            )
+            try:
+                issues = [item.model_dump(mode="json") for item in retryable]
+                if repair is markdown_repair:
+                    repaired, repair_usage = repair(
+                        repair_markdown,
+                        repair_pages,
+                        repair_capabilities,
+                        request.allowed_classes,
+                        repair_schema,
+                        issues=issues,
+                        prior=repair_prior,
+                    )
+                else:
+                    image_pages = {page.page for page in repair_pages if page.visual_review_regions}
+                    repaired, repair_usage = repair(
+                        repair_pages,
+                        image_pages,
+                        repair_capabilities,
+                        request.allowed_classes,
+                        repair_schema,
+                        issues,
+                        repair_prior,
+                    )
+                merged = _merge_repair(
+                    cloud, repaired, request.capabilities, repair_items=retryable
+                )
+                local.usage = aggregate_usage([local.usage, repair_usage])
+                local.cloud_output = merged.model_dump(mode="json")
+                local.cloud_attempts.append(
+                    {
+                        "attempt": len(local.cloud_attempts) + 1,
+                        "purpose": "repair",
+                        "output": local.cloud_output,
+                    }
+                )
+                (
+                    local.markdown,
+                    local.refinements,
+                    refinement_warnings,
+                    table_reviews,
+                ) = _apply_refinements(local.pages, merged, set(local.cloud_image_pages))
+                local.document_metadata["table_reviews"] = table_reviews
+                local.warnings.extend(refinement_warnings)
+                repaired_workflow = evaluate_workflow(local, request, merged)
+                repaired_workflow.events = [
+                    *workflow.events,
+                    WorkflowEvent(
+                        state=WorkflowState.REVIEW_REQUIRED,
+                        action="request_deeper_gpt_refinement",
+                        provider=MODEL_NAME,
+                        reason=f"Repair round {repair_round} targeted {len(retryable)} object(s).",
+                        token_impact=repair_usage.total_tokens or 0,
+                        cost_impact_usd=repair_usage.total_cost_usd,
+                    ),
+                    *repaired_workflow.events,
+                ]
+                workflow = repaired_workflow
+                cloud = merged
+            except Exception as exc:
+                message = (
+                    f"Bounded GPT repair failed; human review is required: {type(exc).__name__}."
+                )
+                workflow.review_required.append(message)
+                workflow.review_items.append(
+                    ReviewItem(
+                        id=f"review-{len(workflow.review_items) + 1}",
+                        stage="validate",
+                        code="REPAIR_FAILED",
+                        message=message,
+                        retryable=False,
+                        attempt=repair_round + 1,
+                    )
+                )
+                workflow.events.append(
+                    WorkflowEvent(
+                        state=WorkflowState.REVIEW_REQUIRED,
+                        action="deeper_gpt_refinement_failed",
+                        provider=MODEL_NAME,
+                        reason=message,
+                    )
+                )
+            record_stage_timing(
+                local.timings, "object_repair_seconds", time.perf_counter() - repair_started
+            )
+        if workflow.current_state is not WorkflowState.REVIEW_REQUIRED:
+            break
+        if tuple(workflow.review_required) == before:
+            break
     finalization_started = time.perf_counter()
+    ledger = getattr(cloud_refiner, "request_usage", [])[ledger_start:]
+    if ledger:
+        recorded_count = sum(item.call_count for item in ledger)
+        if (
+            recorded_count + (prior_usage.call_count if prior_usage else 0)
+            != local.usage.call_count
+        ):
+            local.usage = aggregate_usage(([prior_usage] if prior_usage else []) + ledger)
     local.workflow_manifest = workflow.manifest()
     local.checkboxes = workflow.checkboxes
     local.checkbox_corrections = workflow.checkbox_corrections
@@ -494,6 +538,59 @@ def run_workflow_from_parse(
     local.timings["workflow_seconds"] = time.perf_counter() - started
     local.adaptive_processing["stage_timing"] = stage_timing_summary(local.timings)
     return local, workflow
+
+
+def _verify_visual_round(local, cloud, refiner, inspected: set[str], repair_round: int) -> None:
+    from agentic_extractor.rich_document import proposal_digest, visual_status
+
+    verify = getattr(refiner, "verify_visual_objects", None)
+    if not callable(verify):
+        return
+    pages = {page.page: page for page in local.pages}
+    audits = [audit for page in local.pages for audit in page.visual_audits]
+    objects = [
+        item
+        for item in cloud.visual_objects
+        if item.id not in inspected
+        and item.page in pages
+        and visual_status(item, audits)[0] == "pending"
+    ][:8]
+    if not objects:
+        return
+    inspected.update(item.id for item in objects)
+    try:
+        result, usage = verify(local.pages, objects)
+        local.usage = aggregate_usage([local.usage, usage])
+        ids = [item.id for item in result.decisions]
+        for item in objects:
+            decision = next((value for value in result.decisions if value.id == item.id), None)
+            supported = (
+                decision is not None
+                and ids.count(item.id) == 1
+                and decision.supported
+                and decision.transcription.strip() == item.content.strip()
+            )
+            pages[item.page].visual_audits.append(
+                {
+                    "id": item.id,
+                    "digest": proposal_digest(item),
+                    "status": "model_verified" if supported else "pending",
+                    "content": item.content,
+                    "reason": decision.reason if decision else "Missing crop verification.",
+                    "round": repair_round,
+                    "provider": MODEL_NAME,
+                }
+            )
+        local.cloud_attempts.append(
+            {
+                "attempt": len(local.cloud_attempts) + 1,
+                "purpose": "visual_verification",
+                "round": repair_round,
+                "output": result.model_dump(mode="json"),
+            }
+        )
+    except Exception as exc:
+        local.warnings.append(f"Visual verification requires human review: {type(exc).__name__}.")
 
 
 def _merge_repair(
@@ -841,7 +938,7 @@ def evaluate_workflow(
         state: WorkflowState,
         action: str,
         reason: str,
-        provider: Literal["system", "RapidOCR", "PP-DocLayoutV3", "gpt-5.6-luna"] = "system",
+        provider: Literal["system", "RapidOCR", "PP-DocLayoutV3", "gpt-6-sol"] = "system",
     ) -> None:
         events.append(
             WorkflowEvent(
@@ -879,7 +976,7 @@ def evaluate_workflow(
             f"One bounded local retry was attempted for source pages {retries}.",
             "RapidOCR",
         )
-    provider: Literal["system", "gpt-5.6-luna"] = "gpt-5.6-luna" if cloud else "system"
+    provider: Literal["system", "gpt-6-sol"] = "gpt-6-sol" if cloud else "system"
     if cloud and local.usage.call_count >= 1:
         event(
             WorkflowState.PARSED,
@@ -888,7 +985,7 @@ def evaluate_workflow(
             MODEL_NAME,
         )
     else:
-        errors.append("GPT-5.6-luna participation is required for a successful extraction.")
+        errors.append("gpt-6-sol participation is required for a successful extraction.")
 
     if Capability.EXTRACT in request.capabilities:
         try:
@@ -1060,6 +1157,17 @@ def evaluate_workflow(
                     "High Accuracy review required for low-confidence block "
                     f"{item.get('block_id')}: GPT outcome was {item.get('status')}."
                 )
+    if cloud is not None:
+        from agentic_extractor.rich_document import validate_links, visual_issues
+
+        review.extend(
+            visual_issues(
+                local.pages,
+                cloud.visual_objects,
+                [audit for page in local.pages for audit in page.visual_audits],
+            )
+        )
+        review.extend(validate_links(local.pages, cloud.document_links))
     event(WorkflowState.VALIDATED, "validate_output", "Deterministic output validation completed.")
     final = (
         WorkflowState.FAILED
@@ -1232,16 +1340,26 @@ def _evidence(
         chunk_ok = (
             chunk is not None
             and chunk.page == item.page
+            and (
+                chunk.provenance != "gpt-visual"
+                or (
+                    chunk.verification in {"model_verified", "human_approved"}
+                    and chunk.type not in {"figure", "chart"}
+                )
+            )
             and (not item.quote or item.quote in chunk.text)
         )
         box_ok = (
             item.block_id is None
+            and item.chunk_id is None
             and item.source == "gpt-visual"
             and item.page in pages
             and item.page in visual_pages
             and item.bbox is not None
             and len(item.bbox) == 4
             and all(0 <= x <= 1 for x in item.bbox)
+            and item.bbox[0] < item.bbox[2]
+            and item.bbox[1] < item.bbox[3]
         )
         if block_ok or chunk_ok or box_ok:
             valid.append(item)
@@ -1655,7 +1773,7 @@ def _checkbox_risks(
 
 
 def _checkbox_candidates(local: LocalParseResult, cloud: CloudResult) -> list[CloudCheckbox]:
-    """Return Luna discoveries plus local proposals that can pass consensus."""
+    """Return Sol discoveries plus local proposals that can pass consensus."""
     candidates: list[CloudCheckbox] = []
     seen: set[str] = set()
     for candidate in cloud.checkboxes:
@@ -1703,7 +1821,7 @@ def _checkbox_candidates(local: LocalParseResult, cloud: CloudResult) -> list[Cl
                     label_block_id=candidate.label_block_id,
                     label_chunk_id=candidate.label_chunk_id,
                     confidence=candidate.detector_score,
-                    reason="OpenCV-only proposal; Luna discovery did not independently match it.",
+                    reason="OpenCV-only proposal; Sol discovery did not independently match it.",
                     evidence=(
                         [
                             CloudEvidence(
@@ -1789,7 +1907,7 @@ def _checkboxes(
             for item in records
         ):
             risks.append("control overlaps another checkbox proposal")
-        luna_discovered = identifier in cloud_ids
+        sol_discovered = identifier in cloud_ids
         verification_matches = bool(
             verification
             and verification.page == candidate.page
@@ -1802,7 +1920,7 @@ def _checkboxes(
             risks.append("OpenCV did not independently detect this control")
         else:
             if local_candidate.state.value != candidate.state:
-                risks.append("OpenCV and main Luna states disagree")
+                risks.append("OpenCV and main Sol states disagree")
             label_ids_agree = bool(
                 candidate.label_block_id
                 and candidate.label_block_id == local_candidate.label_block_id
@@ -1823,8 +1941,8 @@ def _checkboxes(
             risks.append("RapidOCR label grounding is missing or ambiguous")
         if label_score is None or label_score < 0.85:
             risks.append("RapidOCR label confidence is below 0.85")
-        if not luna_discovered and not verification_matches:
-            risks.append("Luna did not confirm this control")
+        if not sol_discovered and not verification_matches:
+            risks.append("Sol did not confirm this control")
         if verification and not verification_matches:
             risks.append(
                 "targeted GPT verification did not agree at confidence "
@@ -1882,7 +2000,7 @@ def _checkboxes(
                     else "incomplete"
                 ),
                 engine_provenance=(
-                    (["OpenCV"] if local_candidate else []) + ["RapidOCR", "gpt-5.6-luna"]
+                    (["OpenCV"] if local_candidate else []) + ["RapidOCR", "gpt-6-sol"]
                 ),
             )
         )

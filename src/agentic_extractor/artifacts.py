@@ -228,7 +228,7 @@ def build_local_artifacts(
             {
                 "gpt_context_pages": result.cloud_pages,
                 "gpt_image_pages": result.cloud_image_pages,
-                "gpt_model": "gpt-5.6-luna",
+                "gpt_model": "gpt-6-sol",
                 "reasoning_effort": "medium",
             }
         )
@@ -297,7 +297,7 @@ def build_local_artifacts(
 
 
 def _synchronize_accepted_tables(result: LocalParseResult) -> LocalParseResult:
-    # Table review (Luna audit) can accept or reject a table's structure after
+    # Table review (Sol audit) can accept or reject a table's structure after
     # `result.markdown` was first assembled, so the stored Markdown can under-count how many
     # times a currently-accepted table's HTML actually appears. When that happens, rebuild
     # Markdown from the pages (which reflect the current accepted/rejected state) instead of
@@ -364,6 +364,8 @@ def _canonical_chunk(chunk: Any) -> dict[str, Any]:
         "bbox": chunk.bbox,
         "polygon": None,
         "raw_scores": chunk.raw_scores,
+        "provenance": chunk.provenance,
+        "verification": chunk.verification,
     }
 
 
@@ -384,6 +386,23 @@ def _annotated_pdf(result: LocalParseResult) -> bytes:
     for page in result.pages:
         image = Image.open(io.BytesIO(page.original_image_bytes or page.image_bytes)).convert("RGB")
         draw = ImageDraw.Draw(image)
+        for chunk in page.chunks:
+            if chunk.provenance != "gpt-visual" or not chunk.bbox:
+                continue
+            left, top, right, bottom = chunk.bbox
+            box = (
+                left * image.width,
+                top * image.height,
+                right * image.width,
+                bottom * image.height,
+            )
+            color = (
+                "#008855"
+                if chunk.verification in {"model_verified", "human_approved"}
+                else "#D06000"
+            )
+            draw.rectangle(box, outline=color, width=max(2, image.width // 700))
+            draw.text(box[:2], f"{chunk.type}: {chunk.verification}", fill=color)
         for region in page.layout_regions:
             points = (
                 [(point[0], point[1]) for point in region.polygon]
