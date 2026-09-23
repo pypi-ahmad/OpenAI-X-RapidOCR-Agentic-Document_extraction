@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "diagram_type": "sequence",
+  "meta": {
+    "title": "Local API Parse and Extract Sequence",
+    "output": "../api-processing-sequence.html",
+    "quality_profile": "showcase",
+    "column_fit": "spread",
+    "viewBox": [1080, 615]
+  },
+  "participants": [
+    { "id": "client", "type": "frontend", "label": "Client", "sublabel": "Local caller" },
+    { "id": "api", "type": "backend", "label": "FastAPI", "sublabel": "Local job API" },
+    { "id": "parse", "type": "backend", "label": "Canonical Parse", "sublabel": "Hybrid pipeline" },
+    { "id": "ocr", "type": "backend", "label": "RapidOCR", "sublabel": "Text and geometry" },
+    { "id": "layout", "type": "backend", "label": "PP-DocLayoutV3", "sublabel": "Local layout worker" },
+    { "id": "sol", "type": "external", "label": "GPT-6 Sol", "sublabel": "Required refinement" },
+    { "id": "extract", "type": "backend", "label": "Schema extraction", "sublabel": "Reuses Parse result" }
+  ],
+  "segments": [
+    { "from": 140, "to": 420, "label": "Parse document" },
+    { "from": 430, "to": 550, "label": "Extract from parsed job" }
+  ],
+  "messages": [
+    { "id": "parse-request", "from": "client", "to": "api", "y": 160, "label": "POST /api/v1/jobs/parse", "variant": "emphasis" },
+    { "id": "start-parse", "from": "api", "to": "parse", "y": 188, "label": "submit document for Parse" },
+    { "id": "run-ocr", "from": "parse", "to": "ocr", "y": 216, "label": "run RapidOCR first" },
+    { "id": "ocr-result", "from": "ocr", "to": "parse", "y": 244, "label": "raw OCR blocks and scores", "variant": "return" },
+    { "id": "run-layout", "from": "parse", "to": "layout", "y": 272, "label": "analyze page layout" },
+    { "id": "layout-result", "from": "layout", "to": "parse", "y": 300, "label": "regions and reading order", "variant": "return" },
+    { "id": "refine", "from": "parse", "to": "sol", "y": 328, "label": "images + OCR/layout context", "variant": "emphasis" },
+    { "id": "refined", "from": "sol", "to": "parse", "y": 356, "label": "refined Markdown + grounding", "variant": "return" },
+    { "id": "parse-finished", "from": "parse", "to": "api", "y": 384, "label": "Parse result and artifacts", "variant": "return" },
+    { "id": "parse-job", "from": "api", "to": "client", "y": 412, "label": "job id and terminal state", "variant": "return" },
+    { "id": "extract-request", "from": "client", "to": "api", "y": 440, "label": "POST /api/v1/jobs/{id}/extract", "variant": "emphasis" },
+    { "id": "reuse-parse", "from": "api", "to": "extract", "y": 468, "label": "reuse existing Parse result" },
+    { "id": "extract-result", "from": "extract", "to": "api", "y": 496, "label": "fields, review state, artifacts", "variant": "return" },
+    { "id": "extract-job", "from": "api", "to": "client", "y": 524, "label": "updated job status", "variant": "return" }
+  ]
+}
