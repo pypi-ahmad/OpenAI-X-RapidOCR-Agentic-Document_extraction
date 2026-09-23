@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "Document Processing Architecture",
+    "output": "../document-processing-architecture.html",
+    "quality_profile": "showcase",
+    "repository": {
+      "url": "https://github.com/pypi-ahmad/OpenAI-X-RapidOCR-Agentic-Document_extraction",
+      "revision": "053efbf2feb697d72abda7aec0f93e45fdc5a173"
+    }
+  },
+  "layout": { "mode": "grid", "cols": 4, "cellW": 160, "cellH": 100, "gapX": 100, "gapY": 170 },
+  "components": [
+    { "id": "entrypoints", "type": "frontend", "label": "Local UI & API", "sublabel": "Streamlit · FastAPI", "row": 0, "col": 0, "sources": [{ "path": "app.py" }, { "path": "src/agentic_extractor/api.py" }] },
+    { "id": "workflow", "type": "backend", "label": "Agent workflow", "sublabel": "Coordinates Parse and tasks", "row": 0, "col": 1, "sources": [{ "path": "src/agentic_extractor/workflow.py" }] },
+    { "id": "pipeline", "type": "backend", "label": "Hybrid Parse", "sublabel": "Canonical document input", "row": 0, "col": 2, "sources": [{ "path": "src/agentic_extractor/pipeline.py" }] },
+    { "id": "localEngines", "type": "backend", "label": "OCR & layout", "sublabel": "RapidOCR · PP-DocLayout", "row": 0, "col": 3, "sources": [{ "path": "src/agentic_extractor/ocr.py" }, { "path": "src/agentic_extractor/layout.py" }, { "path": "tools/pp_doclayout/worker.py" }] },
+    { "id": "artifacts", "type": "backend", "label": "Artifacts", "sublabel": "JSON · PDF · HTML · ZIP", "row": 1, "col": 0, "sources": [{ "path": "src/agentic_extractor/artifacts.py" }] },
+    { "id": "validation", "type": "backend", "label": "Evidence checks", "sublabel": "Grounding · adjudication", "row": 1, "col": 1, "sources": [{ "path": "src/agentic_extractor/capabilities.py" }, { "path": "src/agentic_extractor/workflow.py" }] },
+    { "id": "refiner", "type": "backend", "label": "OpenAIRefiner", "sublabel": "Prompted GPT-6 Sol", "row": 1, "col": 2, "sources": [{ "path": "src/agentic_extractor/openai_refiner.py" }, { "path": "src/agentic_extractor/prompts/policy.md" }] },
+    { "id": "openai", "type": "external", "label": "OpenAI API", "sublabel": "Responses API", "row": 1, "col": 3, "sources": [{ "path": "src/agentic_extractor/config.py" }] }
+  ],
+  "connections": [
+    { "id": "client-request", "from": "entrypoints", "to": "workflow", "label": "document request" },
+    { "id": "workflow-parse", "from": "workflow", "to": "pipeline", "label": "canonical Parse" },
+    { "id": "parse-local", "from": "pipeline", "to": "localEngines", "label": "page images" },
+    { "id": "local-refiner", "from": "localEngines", "to": "refiner", "label": "OCR and layout evidence" },
+    { "id": "refiner-api", "from": "refiner", "to": "openai" },
+    { "id": "api-refiner", "from": "openai", "to": "refiner" },
+    { "id": "refiner-validation", "from": "refiner", "to": "validation", "label": "grounded result" },
+    { "id": "workflow-validation", "from": "workflow", "to": "validation" },
+    { "id": "validation-artifacts", "from": "validation", "to": "artifacts", "label": "reviewed output" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Local evidence", "items": ["RapidOCR output stays immutable", "Layout runs in an isolated worker"] },
+    { "dot": "violet", "title": "Refinement", "items": ["GPT proposals are checked against evidence", "Unsupported values abstain or need review"] },
+    { "dot": "emerald", "title": "Canonical output", "items": ["Workflows consume refined Markdown and grounding", "Exports preserve provenance and diagnostics"] }
+  ]
+}
