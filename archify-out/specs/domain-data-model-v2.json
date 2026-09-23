@@ -1,0 +1,35 @@
+{
+  "schema_version": 1,
+  "diagram_type": "dataflow",
+  "meta": {
+    "title": "Document Processing Domain Model",
+    "output": "../domain-data-model.html",
+    "quality_profile": "showcase",
+    "viewBox": [1500, 650]
+  },
+  "stages": [
+    { "label": "Request" },
+    { "label": "Source evidence" },
+    { "label": "Canonical Parse" },
+    { "label": "Workflow" },
+    { "label": "Result records" }
+  ],
+  "nodes": [
+    { "id": "request", "type": "backend", "label": "DocumentRequest", "stage": 0, "row": 0, "width": 120, "height": 58 },
+    { "id": "source", "type": "backend", "label": "SourcePage", "stage": 1, "row": 0, "width": 120, "height": 58 },
+    { "id": "parse", "type": "backend", "label": "LocalParseResult", "stage": 2, "row": 0, "width": 120, "height": 58 },
+    { "id": "workflow", "type": "backend", "label": "AgentWorkflowResult", "stage": 3, "row": 2, "width": 150, "height": 58 },
+    { "id": "records", "type": "backend", "label": "Result records", "stage": 4, "row": 0, "width": 120, "height": 58 }
+  ],
+  "flows": [
+    { "id": "request-source", "from": "request", "to": "source", "label": "selects · 1:n" },
+    { "id": "source-parse", "from": "source", "to": "parse", "label": "grounded OCR/layout", "labelAt": [423, 200] },
+    { "id": "parse-workflow", "from": "parse", "to": "workflow", "label": "adjudicated · 1:1" },
+    { "id": "parse-records", "from": "parse", "to": "records", "label": "exports / reports", "route": "straight" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Source relationships", "items": ["DocumentRequest selects SourcePage (1:n)", "SourcePage contains OCRBlock (1:n) and groups ParseChunk (1:n)", "ParseChunk references OCRBlock (n:m)"] },
+    { "dot": "violet", "title": "Evidence relationships", "items": ["SourcePage grounds EvidenceRef (1:n)", "OCRBlock and ParseChunk may support EvidenceRef (0:n)", "ValidatedField cites EvidenceRef (1:n)"] },
+    { "dot": "emerald", "title": "Workflow and records", "items": ["AgentWorkflowResult has WorkflowEvent, ValidatedField, and FieldCorrection (1:n each)", "A ValidatedField may have many targeted FieldCorrections", "LocalParseResult reports UsageRecord (1:1) and exports Artifact (1:n)"] }
+  ]
+}
