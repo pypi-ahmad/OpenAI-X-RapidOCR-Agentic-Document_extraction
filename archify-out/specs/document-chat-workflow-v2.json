@@ -1,0 +1,37 @@
+{
+  "schema_version": 1,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "Document-Only Chat Workflow",
+    "output": "../document-chat-workflow.html",
+    "quality_profile": "showcase",
+    "viewBox": [1500, 714]
+  },
+  "lanes": [
+    { "id": "interaction", "label": "Question" },
+    { "id": "retrieval", "label": "Document retrieval" },
+    { "id": "generation", "label": "Answer generation" },
+    { "id": "evidence", "label": "Evidence check" },
+    { "id": "response", "label": "Response" }
+  ],
+  "mainPath": ["question", "scopeSplit", "rankPack", "chat", "validate", "answer"],
+  "nodes": [
+    { "id": "question", "lane": "interaction", "col": 0, "type": "external", "label": "Question" },
+    { "id": "scopeSplit", "lane": "retrieval", "col": 1, "type": "backend", "label": "Scope + split" },
+    { "id": "rankPack", "lane": "retrieval", "col": 3, "type": "backend", "label": "Rank + pack" },
+    { "id": "chat", "lane": "generation", "col": 5, "type": "external", "label": "GPT-6 Sol" },
+    { "id": "validate", "lane": "evidence", "col": 5, "type": "security", "label": "Cite check" },
+    { "id": "answer", "lane": "response", "col": 5, "type": "backend", "label": "Answer" }
+  ],
+  "edges": [
+    { "id": "ask-scope", "from": "question", "to": "scopeSplit", "role": "main" },
+    { "id": "scope-rank", "from": "scopeSplit", "to": "rankPack", "role": "main" },
+    { "id": "rank-chat", "from": "rankPack", "to": "chat", "role": "main" },
+    { "id": "chat-citations", "from": "chat", "to": "validate", "role": "main" },
+    { "id": "citations-answer", "from": "validate", "to": "answer", "role": "main" }
+  ],
+  "cards": [
+    { "dot": "cyan", "title": "Bounded retrieval", "items": ["Select up to 12 files; split Markdown by page and heading", "Lexical retrieval packs up to 12 chunks within 40k characters"] },
+    { "dot": "violet", "title": "Grounding", "items": ["GPT-6 Sol answers from retrieved document text", "Citations are checked against retrieved chunk IDs"] }
+  ]
+}
